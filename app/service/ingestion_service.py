@@ -16,7 +16,6 @@ from app.core.logger import get_logger
 from app.core.settings import config
 from app.models.api import IngestionRequest
 
-# Initialize logger for this module
 logger = get_logger("IngestionService")
 
 
@@ -87,7 +86,6 @@ class IngestionService:
             node.metadata["user_id"] = request.user_id
             node.metadata["project_id"] = request.project_id
 
-        logger.info("Creating vector store index")
         storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
 
         VectorStoreIndex(
