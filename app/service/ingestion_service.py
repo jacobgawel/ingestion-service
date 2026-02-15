@@ -1,17 +1,19 @@
 from io import BytesIO
 from typing import List
-from fastapi import UploadFile
-from mixedbread import AsyncMixedbread
-from openai import AsyncOpenAI
-from qdrant_client import AsyncQdrantClient
+
 from docling.document_converter import DocumentConverter
 from docling_core.types.io import DocumentStream
-from llama_index.core import Document, StorageContext, Settings, VectorStoreIndex
+from fastapi import UploadFile
+from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import MarkdownNodeParser
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from app.core.settings import config
+from mixedbread import AsyncMixedbread
+from openai import AsyncOpenAI
+from qdrant_client import AsyncQdrantClient
+
 from app.core.logger import get_logger
+from app.core.settings import config
 from app.models.api import IngestionRequest
 
 # Initialize logger for this module

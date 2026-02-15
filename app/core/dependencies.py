@@ -2,9 +2,8 @@ from fastapi import Depends
 from mixedbread import AsyncMixedbread
 from openai import AsyncOpenAI
 from qdrant_client import AsyncQdrantClient
-from app.clients import get_openai_client
-from app.clients import get_qdrant_client
-from app.clients import get_mixedbread_client
+
+from app.clients import get_mixedbread_client, get_openai_client, get_qdrant_client
 from app.service import IngestionService
 
 

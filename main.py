@@ -5,8 +5,8 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.settings import config
 from app.core.logger import configure_uvicorn_logging
+from app.core.settings import config
 from app.routes import ingestion
 
 
