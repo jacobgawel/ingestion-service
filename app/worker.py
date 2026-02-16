@@ -5,6 +5,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
 from app.clients import get_mixedbread_client, get_openai_client, get_qdrant_client
+from app.core.temporal import WORKER_QUEUE
 from app.service import IngestionService
 from app.temporal.activities import IngestionActivities
 from app.temporal.workflows import IngestionWorkflow
@@ -24,7 +25,7 @@ async def main():
 
     worker = Worker(
         client,
-        task_queue="ingestion-queue",
+        task_queue=WORKER_QUEUE.INGESTION,
         workflows=[IngestionWorkflow],
         activities=[activities.parse_files, activities.embed_markdown],
     )

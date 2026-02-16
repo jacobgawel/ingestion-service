@@ -1,17 +1,18 @@
 import io
 
-from minio import Minio
+import boto3
 
 from app.core.settings import config
 
 
 class MinioHandler:
     def __init__(self):
-        self.client = Minio(
-            endpoint=config.MINIO_HOST,
-            access_key=config.MINIO_ACCESS_KEY,
-            secret_key=config.MINIO_SECRET_KEY,
-            secure=False,
+        self.client = boto3.client(
+            "s3",
+            endpoint_url=config.MINIO_HOST,
+            aws_access_key_id=config.MINIO_ACCESS_KEY,
+            aws_secret_access_key=config.MINIO_SECRET_KEY,
+            region_name="us-east-1",
         )
         self.bucket_name = "ingestion-bucket"
         self._ensure_bucket()
@@ -21,48 +22,42 @@ class MinioHandler:
         Downloads file into an in-memory byte stream.
         WARNING: High RAM usage for large files.
         """
-        response = None
         try:
-            # get_object returns a stream response
-            response = self.client.get_object(self.bucket_name, object_name)
-
+            response = self.client.get_object(Bucket=self.bucket_name, Key=object_name)
             # Read the entire response into memory
-            file_data = io.BytesIO(response.read())
-
+            file_data = io.BytesIO(response["Body"].read())
             # Reset cursor to the beginning so it can be read again
             file_data.seek(0)
             return file_data
-        finally:
-            # Always close the MinIO network response connection
-            if response:
-                response.close()
-                response.release_conn()
+        except Exception as e:
+            raise Exception(f"Failed to download {object_name}: {str(e)}")
 
     def _ensure_bucket(self):
         """Make sure the bucket exists on startup."""
-        if not self.client.bucket_exists(self.bucket_name):
-            self.client.make_bucket(self.bucket_name)
+        try:
+            self.client.head_bucket(Bucket=self.bucket_name)
+        except self.client.exceptions.NoSuchBucket:
+            self.client.create_bucket(Bucket=self.bucket_name)
 
     def upload_file(self, file_data, size: int, object_name: str):
         """Uploads a stream to MinIO."""
         self.client.put_object(
-            bucket_name=self.bucket_name,
-            object_name=object_name,
-            data=file_data,
-            length=size,
-            content_type="application/octet-stream",
+            Bucket=self.bucket_name,
+            Key=object_name,
+            Body=file_data,
+            ContentType="application/octet-stream",
         )
         return object_name
 
     def download_file(self, object_name: str, file_path: str):
         """Downloads file from MinIO to local disk (for processing)."""
-        self.client.fget_object(
-            bucket_name=self.bucket_name, object_name=object_name, file_path=file_path
+        self.client.download_file(
+            Bucket=self.bucket_name, Key=object_name, Filename=file_path
         )
 
     def delete_file(self, object_name: str):
         """Cleanup after processing."""
-        self.client.remove_object(self.bucket_name, object_name)
+        self.client.delete_object(Bucket=self.bucket_name, Key=object_name)
 
 
 # Create a singleton instance

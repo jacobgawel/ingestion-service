@@ -4,6 +4,7 @@ from llama_index.core import Document
 from temporalio import activity
 
 from app.core.minio import minio_handler
+from app.core.temporal import INGESTION_ACTIVITY
 from app.models.workflows import (
     IngestionFilePayload,
     IngestionWorkflowRequest,
@@ -15,7 +16,7 @@ class IngestionActivities:
     def __init__(self, ingestion_service: IngestionService) -> None:
         self._ingestion_service = ingestion_service
 
-    @activity.defn(name="parse_files")
+    @activity.defn(name=INGESTION_ACTIVITY.PARSE_FILES)
     async def parse_files(
         self, request: IngestionWorkflowRequest, files: List[IngestionFilePayload]
     ) -> list[Document]:
@@ -44,7 +45,7 @@ class IngestionActivities:
 
         return results
 
-    @activity.defn(name="embed_markdown")
+    @activity.defn(name=INGESTION_ACTIVITY.EMBED_MARKDOWN)
     async def embed_markdown(
         self,
         request: IngestionWorkflowRequest,

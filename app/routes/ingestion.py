@@ -8,6 +8,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 
 from app.core.logger import get_logger
 from app.core.minio import minio_handler
+from app.core.temporal import WORKER_QUEUE
 from app.models.api import IngestionRequest
 from app.models.workflows import (
     IngestionFilePayload,
@@ -37,29 +38,44 @@ async def ingest_data(
     file_payloads = []
 
     try:
+        # Phase 1: Load all files into memory
+        files_in_memory = []
+
         for file in files:
-            # 1. GENERATE UNIQUE OBJECT NAME
-            object_name = f"{request_data.project_id}/{uuid.uuid4()}-{file.filename}"
-
-            # 2. GET FILE SIZE (Required for MinIO put_object)
-            file.file.seek(0, 2)
-            file_size = file.file.tell()
             file.file.seek(0)
+            file_content = file.file.read()
+            files_in_memory.append(
+                {
+                    "filename": file.filename,
+                    "content": file_content,
+                    "content_type": file.content_type,
+                    "size": len(file_content),
+                }
+            )
 
-            # 3. UPLOAD TO MINIO
+        logger.info(f"Loaded {len(files_in_memory)} files into memory")
+
+        # Phase 2: Upload all files
+        for file_data in files_in_memory:
+            # 1. GENERATE UNIQUE OBJECT NAME
+            object_name = (
+                f"{request_data.project_id}/{uuid.uuid4()}-{file_data['filename']}"
+            )
+
+            # 2. UPLOAD TO MINIO
             await asyncio.to_thread(
                 minio_handler.upload_file,
-                file_data=file.file,
-                size=file_size,
+                file_data=file_data["content"],
+                size=file_data["size"],
                 object_name=object_name,
             )
 
-            # 4. PREPARE PAYLOAD
+            # 3. PREPARE PAYLOAD
             file_payloads.append(
                 IngestionFilePayload(
-                    filename=file.filename,
+                    filename=file_data["filename"],
                     object_name=object_name,
-                    content_type=file.content_type,
+                    content_type=file_data["content_type"],
                 )
             )
 
@@ -72,7 +88,7 @@ async def ingest_data(
                 )
             ],
             id=f"ingest-{uuid.uuid4()}",  # Unique ID prevents duplicate jobs
-            task_queue="ingestion-queue",  # Task Queue for the worker
+            task_queue=WORKER_QUEUE.INGESTION,  # Task Queue for the worker
         )
         return {
             "status": "started",
