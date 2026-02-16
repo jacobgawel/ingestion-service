@@ -1,13 +1,8 @@
 import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from temporalio.client import Client
 
 router = APIRouter(prefix="/ws", tags=["ingestion"])
-
-
-async def get_temporal_client():
-    return await Client.connect("localhost:7233")
 
 
 @router.websocket("/jobs/{job_id}")

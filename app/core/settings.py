@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     )
     MIXEDBREAD_KEY: str = Field(..., description="Mixedbread API key for embeddings")
 
+    # Temporal
+    TEMPORAL_HOST: str = Field(
+        default="localhost:7233", description="Temporal server host"
+    )
+
     # Minio
     MINIO_HOST: str = Field(..., description="Minio host name")
     MINIO_ACCESS_KEY: str = Field(..., description="Minio access key")

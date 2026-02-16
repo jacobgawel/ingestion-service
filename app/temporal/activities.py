@@ -4,7 +4,8 @@ from typing import List
 from llama_index.core import Document
 from temporalio import activity
 
-from app.core.minio import minio_handler
+from app.clients import get_minio_handler
+from app.clients.minio_client import MinioManager
 from app.core.temporal import INGESTION_ACTIVITY
 from app.models.workflows import (
     IngestionFilePayload,
@@ -14,15 +15,18 @@ from app.service import IngestionService
 
 
 class IngestionActivities:
-    def __init__(self, ingestion_service: IngestionService) -> None:
+    def __init__(
+        self, ingestion_service: IngestionService, minio_handler: MinioManager
+    ) -> None:
         self._ingestion_service = ingestion_service
+        self.minio_handler = minio_handler
 
     def _download_and_parse_sync(
         self, request: IngestionWorkflowRequest, file_payload: IngestionFilePayload
     ) -> Document:
         """Synchronous function to download and parse file data"""
 
-        file_stream = minio_handler.get_file_stream(
+        file_stream = get_minio_handler().get_file_stream(
             object_name=file_payload.object_name
         )
         return self._ingestion_service.process_file(

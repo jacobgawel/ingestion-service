@@ -3,11 +3,9 @@ import uuid
 from typing import List
 
 from fastapi import APIRouter, Depends, File, UploadFile
-from temporalio.client import Client
-from temporalio.contrib.pydantic import pydantic_data_converter
 
+from app.clients import get_minio_handler, get_temporal_client
 from app.core.logger import get_logger
-from app.core.minio import minio_handler
 from app.core.temporal import WORKER_QUEUE
 from app.models.api import IngestionRequest
 from app.models.workflows import (
@@ -32,9 +30,9 @@ async def ingest_data(
     logger.info(
         f"Received ingestion request: user_id={request_data.user_id}, project_id={request_data.project_id}, files={len(files)}"
     )
-    client = await Client.connect(
-        "localhost:7233", data_converter=pydantic_data_converter
-    )
+    client = get_temporal_client()
+    minio = get_minio_handler()
+
     file_payloads = []
 
     try:
@@ -64,7 +62,7 @@ async def ingest_data(
 
             # 2. UPLOAD TO MINIO
             await asyncio.to_thread(
-                minio_handler.upload_file,
+                minio.upload_file,
                 file_data=file_data["content"],
                 size=file_data["size"],
                 object_name=object_name,

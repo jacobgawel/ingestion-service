@@ -5,14 +5,33 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.logger import configure_uvicorn_logging
+from app.clients.minio_client import _minio_singleton
+from app.clients.temporal_client import close_temporal, initialize_temporal
+from app.core.logger import configure_uvicorn_logging, get_logger
 from app.core.settings import config
 from app.routes import ingestion, jobs
+
+logger = get_logger("Lifespan")
 
 
 @asynccontextmanager
 async def lifespan(app_client: FastAPI):
+    # Startup
+    logger.info("Initializing Temporal client...")
+    await initialize_temporal()
+
+    logger.info("Initializing MinIO client...")
+    _minio_singleton.initialize()
+
+    logger.info("All clients initialized.")
+
     yield
+
+    # Shutdown
+    logger.info("Shutting down clients...")
+    await close_temporal()
+    _minio_singleton.close()
+    logger.info("All clients shut down.")
 
 
 app = FastAPI(
