@@ -1,3 +1,3 @@
-from .ingestion_service import IngestionService
+from .ingestion import IngestionService
 
 __all__ = ["IngestionService"]

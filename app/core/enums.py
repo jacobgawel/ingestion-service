@@ -11,6 +11,6 @@ class LOG_LEVEL(StrEnum):
 
 
 class INGESTION_STATUS(StrEnum):
-    DONE = "done"
-    PROCESSING = "processing"
-    ERROR = "error"
+    COMPLETED = "completed"
+    IN_PROGRESS = "in_progress"
+    FAILED = "failed"

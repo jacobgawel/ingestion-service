@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     )
     MIXEDBREAD_KEY: str = Field(..., description="Mixedbread API key for embeddings")
 
+    # Minio
+    MINIO_HOST: str = Field(..., description="Minio host name")
+    MINIO_ACCESS_KEY: str = Field(..., description="Minio access key")
+    MINIO_SECRET_KEY: str = Field(..., description="Minio secret key")
+
     class Config:
         env_file = ".env"
         case_sensitive = True

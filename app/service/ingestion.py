@@ -1,9 +1,7 @@
 from io import BytesIO
-from typing import List
 
 from docling.document_converter import DocumentConverter
 from docling_core.types.io import DocumentStream
-from fastapi import UploadFile
 from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import MarkdownNodeParser
 from llama_index.embeddings.openai import OpenAIEmbedding
@@ -14,7 +12,9 @@ from qdrant_client import AsyncQdrantClient
 
 from app.core.logger import get_logger
 from app.core.settings import config
-from app.models.api import IngestionRequest
+from app.models.workflows import (
+    IngestionWorkflowRequest,
+)
 
 logger = get_logger("IngestionService")
 
@@ -44,39 +44,39 @@ class IngestionService:
         )
         logger.info("IngestionService initialized successfully")
 
-    def _parse_file(self, file: BytesIO, file_name: str | None) -> str:
+    def _parse_file(self, file: BytesIO, file_name: str) -> str:
         """Process file"""
-        logger.info(f"Parsing file: {file_name or 'default'}")
-        doc_stream = DocumentStream(name=file_name or "default", stream=file)
+        logger.info(f"Parsing file: {file_name}")
+        doc_stream = DocumentStream(name=file_name, stream=file)
 
         conversion_result = self.converter.convert(doc_stream)
         markdown_text = conversion_result.document.export_to_markdown()
 
-        logger.info(f"Successfully parsed file: {file_name or 'default'}")
+        logger.info(f"Successfully parsed file: {file_name}")
         return markdown_text
 
-    async def process_pipeline(
-        self, request: IngestionRequest, files: List[UploadFile]
+    async def process_files(
+        self, request: IngestionWorkflowRequest, file: BytesIO, file_name: str
+    ) -> Document:
+
+        result = self._parse_file(file=file, file_name=file_name)
+        processed_file = Document(
+            text=result,
+            metadata={
+                "filename": file_name,
+                "user_id": request.user_id,
+                "project_id": request.project_id,
+            },
+        )
+
+        return processed_file
+
+    async def embed_markdown(
+        self,
+        request: IngestionWorkflowRequest,
+        processed_files: list[Document],
     ):
-        logger.info(f"Processing {len(files)} file(s)")
-
-        processed_files: list[Document] = []
         splitter = MarkdownNodeParser()
-
-        for file in files:
-            file_content = await file.read()
-            file_stream = BytesIO(file_content)
-
-            result = self._parse_file(file=file_stream, file_name=file.filename)
-            doc = Document(
-                text=result,
-                metadata={
-                    "filename": file.filename,
-                    "user_id": request.user_id,
-                    "project_id": request.project_id,
-                },
-            )
-            processed_files.append(doc)
 
         logger.info("Splitting documents into nodes")
         nodes = splitter.get_nodes_from_documents(processed_files)
@@ -96,4 +96,3 @@ class IngestionService:
         )
 
         logger.info("Ingestion pipeline completed successfully")
-        return True
