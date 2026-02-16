@@ -21,6 +21,7 @@ class MinioHandler:
         """
         Downloads file into an in-memory byte stream.
         WARNING: High RAM usage for large files.
+        TODO: Come back to this later and just write to disk
         """
         try:
             response = self.client.get_object(Bucket=self.bucket_name, Key=object_name)

@@ -1,3 +1,4 @@
+import asyncio
 from typing import List
 
 from llama_index.core import Document
@@ -16,6 +17,20 @@ class IngestionActivities:
     def __init__(self, ingestion_service: IngestionService) -> None:
         self._ingestion_service = ingestion_service
 
+    def _download_and_parse_sync(
+        self, request: IngestionWorkflowRequest, file_payload: IngestionFilePayload
+    ) -> Document:
+        """Synchronous function to download and parse file data"""
+
+        file_stream = minio_handler.get_file_stream(
+            object_name=file_payload.object_name
+        )
+        return self._ingestion_service.process_file(
+            request=request,
+            file=file_stream,
+            file_name=file_payload.filename or "default",
+        )
+
     @activity.defn(name=INGESTION_ACTIVITY.PARSE_FILES)
     async def parse_files(
         self, request: IngestionWorkflowRequest, files: List[IngestionFilePayload]
@@ -23,25 +38,30 @@ class IngestionActivities:
         """
         Activity 1: Returns the Markdown string.
         """
-        results = []
+
         total_files = len(files)
 
-        # We manually loop here instead of inside the service
-        # so we can tell Temporal "I'm still alive!"
-        for index, file in enumerate(files):
-            # 1. Heartbeat to reset the "liveness" timer
-            activity.heartbeat(
-                f"Parsing file {index + 1}/{total_files}: {file.filename}"
-            )
+        # Determine concurrency limit (e.g., process 4 files at a time)
+        semaphore = asyncio.Semaphore(4)
 
-            file_stream = minio_handler.get_file_stream(object_name=file.object_name)
+        async def _process_single_file(
+            index: int, file_payload: IngestionFilePayload
+        ) -> Document:
+            async with semaphore:
+                activity.heartbeat(
+                    f"Parsing file {index + 1}/{total_files}: {file_payload.filename}"
+                )
 
-            # 2. Call the service logic for a SINGLE file
-            batch_result = await self._ingestion_service.process_files(
-                request=request, file=file_stream, file_name=file.filename or "default"
-            )
+                # offload this to a thread
+                return await asyncio.to_thread(
+                    self._download_and_parse_sync, request, file_payload
+                )
 
-            results.append(batch_result)
+        # Create tasks for all files
+        tasks = [_process_single_file(i, file) for i, file in enumerate(files)]
+
+        # Run them concurrently
+        results = await asyncio.gather(*tasks)
 
         return results
 

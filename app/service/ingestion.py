@@ -55,7 +55,7 @@ class IngestionService:
         logger.info(f"Successfully parsed file: {file_name}")
         return markdown_text
 
-    async def process_files(
+    def process_file(
         self, request: IngestionWorkflowRequest, file: BytesIO, file_name: str
     ) -> Document:
 

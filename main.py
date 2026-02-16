@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.logger import configure_uvicorn_logging
 from app.core.settings import config
-from app.routes import ingestion
+from app.routes import ingestion, jobs
 
 
 @asynccontextmanager
@@ -31,6 +31,8 @@ app.add_middleware(
 )
 
 app.include_router(ingestion.router)
+app.include_router(jobs.router)
+
 
 if __name__ == "__main__":
     import torch
