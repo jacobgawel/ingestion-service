@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, File, UploadFile
 
 from app.clients import get_minio_handler, get_temporal_client
 from app.core.logger import get_logger
-from app.core.temporal import WORKER_QUEUE
+from app.core.temporal import INGESTION_WORKFLOW, WORKER_QUEUE
 from app.models.api import IngestionRequest
 from app.models.workflows import (
     IngestionFilePayload,
@@ -78,7 +78,7 @@ async def ingest_data(
             )
 
         handle = await client.start_workflow(
-            "IngestionWorkflow",
+            INGESTION_WORKFLOW.INGESTION_WORFKLOW,
             args=[
                 IngestionWorkflowDTO(
                     request=IngestionWorkflowRequest(**request_data.model_dump()),
