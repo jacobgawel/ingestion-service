@@ -53,4 +53,4 @@ class Settings(BaseSettings):
         case_sensitive = True
 
 
-config = Settings()  # type: ignore
+config = Settings()  # pyright: ignore[reportCallIssue]
