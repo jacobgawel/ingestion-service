@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 
+import torch
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -54,8 +55,6 @@ app.include_router(jobs.router)
 
 
 if __name__ == "__main__":
-    import torch
-
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
     print(f"CUDA version: {torch.version.cuda}")

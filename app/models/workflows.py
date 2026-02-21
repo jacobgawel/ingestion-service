@@ -10,7 +10,6 @@ class IngestionFilePayload(BaseModel):
 
 
 class IngestionWorkflowRequest(BaseModel):
-    job_id: str = Field(..., description="ID of the workflow job")
     user_id: Optional[str] = Field(
         None, description="Optional field that will append a user_id for filtering"
     )
