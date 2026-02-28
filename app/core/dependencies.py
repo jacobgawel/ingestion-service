@@ -2,9 +2,15 @@ from fastapi import Depends
 from mixedbread import AsyncMixedbread
 from openai import AsyncOpenAI
 from qdrant_client import AsyncQdrantClient
+from scyllapy import Scylla
 
-from app.clients import get_mixedbread_client, get_openai_client, get_qdrant_client
-from app.service import IngestionService
+from app.clients import (
+    get_mixedbread_client,
+    get_openai_client,
+    get_qdrant_client,
+    get_scylla_client,
+)
+from app.service import IngestionService, ScyllaService
 
 
 def get_ingestion_service(
@@ -17,3 +23,9 @@ def get_ingestion_service(
         openai_client=openai_client,
         mixedbread_client=mixedbread_client,
     )
+
+
+def get_scylla_service(
+    scylla_client: Scylla = Depends(get_scylla_client),
+) -> ScyllaService:
+    return ScyllaService(scylla_client=scylla_client)
