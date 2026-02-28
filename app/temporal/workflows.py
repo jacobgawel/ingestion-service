@@ -3,6 +3,7 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
+from app.core.temporal import INGESTION_ACTIVITY
 from app.models.workflows import IngestionWorkflowDTO
 
 
@@ -20,7 +21,7 @@ class IngestionWorkflow:
 
         # --- STEP 1: PARSE ---
         documents = await workflow.execute_activity(
-            "parse_files",
+            INGESTION_ACTIVITY.PARSE_FILES,
             args=[workflow_dto.request, workflow_dto.files],
             start_to_close_timeout=timedelta(minutes=10),
             retry_policy=common_retry_policy,
@@ -28,7 +29,7 @@ class IngestionWorkflow:
 
         # --- STEP 2: EMBED ---
         result = await workflow.execute_activity(
-            "embed_markdown",
+            INGESTION_ACTIVITY.EMBED_MARKDOWN,
             args=[workflow_dto.request, documents],
             start_to_close_timeout=timedelta(minutes=10),
             retry_policy=common_retry_policy,

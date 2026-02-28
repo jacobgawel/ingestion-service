@@ -11,4 +11,4 @@ class INGESTION_ACTIVITY(StrEnum):
 
 
 class INGESTION_WORKFLOW(StrEnum):
-    INGESTION_WORFKLOW = "IngestionWorkflow"
+    WORKFLOW = "IngestionWorkflow"

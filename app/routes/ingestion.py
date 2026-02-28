@@ -77,8 +77,10 @@ async def ingest_data(
                 )
             )
 
+        logger.info(f"Finished uploading: {len(files_in_memory)} files")
+
         handle = await client.start_workflow(
-            INGESTION_WORKFLOW.INGESTION_WORFKLOW,
+            INGESTION_WORKFLOW.WORKFLOW,
             args=[
                 IngestionWorkflowDTO(
                     request=IngestionWorkflowRequest(**request_data.model_dump()),
