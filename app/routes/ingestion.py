@@ -100,6 +100,7 @@ async def ingest_data(
         for payload in file_payloads:
             file_id = await repo.create_file(
                 job_id=job_id,
+                project_id=request_data.project_id,
                 filename=payload.filename,
                 object_name=payload.object_name,
                 content_type=payload.content_type,
@@ -122,7 +123,6 @@ async def ingest_data(
         return IngestionResponse(
             status="started",
             job_id=job_id,
-            workflow_id=handle.id,
             run_id=handle.run_id,
             message="File uploaded and ingestion workflow triggered.",
         )

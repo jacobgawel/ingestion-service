@@ -42,6 +42,15 @@ services:
       retries: 5
       start_period: 10s
 
+  nats:
+    image: nats:latest
+    container_name: nexus-nats
+    ports:
+      - "4222:4222"
+    restart: unless-stopped
+    networks:
+      - nexus-network
+
   scylladb:
     image: scylladb/scylla:latest
     container_name: nexus-scylladb

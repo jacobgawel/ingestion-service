@@ -58,10 +58,28 @@ class ScyllaManager:
             logger.info("ScyllaDB client initialized successfully")
             self.__class__._initialized = True
 
+    """
+        -- 1. Simple partition key, no clustering
+        PRIMARY KEY (job_id)
+        -- job_id decides which node stores the row
+
+        -- 2. Partition key + clustering key (what you have)
+        PRIMARY KEY ((job_id), file_id)
+        -- job_id decides the node, file_id sorts rows within that node
+
+        -- 3. Composite partition key
+        PRIMARY KEY ((user_id, project_id), file_id)
+        -- user_id AND project_id TOGETHER decide the node
+        -- meaning you must provide BOTH to query
+    """
+
     def _create_schema(self) -> None:
         """Create keyspace and tables if they don't exist."""
         if self._session is None:
             raise RuntimeError("Cannot create schema: session not connected")
+
+        # FYI: You can only execute one CQL statement at a time.
+        # This is why all the statements are seperated.
 
         self._session.execute(f"""
             CREATE KEYSPACE IF NOT EXISTS {config.SCYLLA_KEYSPACE}
@@ -86,8 +104,19 @@ class ScyllaManager:
             """)
 
         self._session.execute("""
+            CREATE INDEX IF NOT EXISTS ingestion_jobs_project_id_idx
+            ON nexus.ingestion_jobs (project_id);
+            """)
+
+        self._session.execute("""
+            CREATE INDEX IF NOT EXISTS ingestion_jobs_status_idx
+            ON nexus.ingestion_jobs (status);
+            """)
+
+        self._session.execute("""
             CREATE TABLE IF NOT EXISTS ingestion_files (
                 job_id        TEXT,
+                project_id    TEXT,
                 file_id       UUID,
                 filename      TEXT,
                 object_name   TEXT,
@@ -96,8 +125,18 @@ class ScyllaManager:
                 created_at    TIMESTAMP,
                 updated_at    TIMESTAMP,
                 error_message TEXT,
-                PRIMARY KEY (job_id, file_id)
+                PRIMARY KEY ((job_id), file_id)
             )
+            """)
+
+        self._session.execute("""
+            CREATE INDEX IF NOT EXISTS ingestion_files_status_idx
+            ON nexus.ingestion_files (status);
+            """)
+
+        self._session.execute("""
+            CREATE INDEX IF NOT EXISTS ingestion_files_project_id_idx
+            ON nexus.ingestion_files (project_id);
             """)
 
         logger.info("ScyllaDB schema created (keyspace + tables)")

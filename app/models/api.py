@@ -26,7 +26,6 @@ class IngestionRequest(BaseModel):
 class IngestionResponse(BaseModel):
     status: str
     job_id: str
-    workflow_id: str
     run_id: str | None
     message: str
 

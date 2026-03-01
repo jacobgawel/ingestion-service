@@ -14,6 +14,7 @@ dependencies = [
     "llama-index-llms-openai>=0.6.18",
     "llama-index-vector-stores-qdrant>=0.9.1",
     "minio>=7.2.20",
+    "nats-py>=2.9.0",
     "mixedbread>=0.46.0",
     "openai>=2.21.0",
     "pre-commit>=4.5.1",

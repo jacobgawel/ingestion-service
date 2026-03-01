@@ -1,7 +1,9 @@
 import asyncio
+import json
 from typing import List
 
 from llama_index.core import Document
+from nats.aio.client import Client as NATSClient
 from temporalio import activity
 
 from app.clients import get_minio_handler
@@ -25,10 +27,19 @@ class IngestionActivities:
         ingestion_service: IngestionService,
         minio_handler: MinioManager,
         ingestion_repository: IngestionRepository,
+        nats_client: NATSClient,
     ) -> None:
         self._ingestion_service = ingestion_service
         self.minio_handler = minio_handler
         self._repo = ingestion_repository
+        self._nats = nats_client
+
+    async def _publish(self, subject: str, payload: dict) -> None:
+        """Publish a message to NATS, swallowing errors to avoid breaking workflows."""
+        try:
+            await self._nats.publish(subject, json.dumps(payload).encode())
+        except Exception as e:
+            logger.warning(f"Failed to publish NATS message to {subject}: {e}")
 
     def _download_and_parse_sync(
         self, request: IngestionWorkflowRequest, file_payload: IngestionFilePayload
@@ -79,6 +90,16 @@ class IngestionActivities:
                             file_id=file_payload.file_id,
                             status=INGESTION_STATUS.COMPLETED,
                         )
+                        await self._publish(
+                            f"jobs.{job_id}",
+                            {
+                                "type": "file_update",
+                                "job_id": job_id,
+                                "file_id": str(file_payload.file_id),
+                                "filename": file_payload.filename,
+                                "status": INGESTION_STATUS.COMPLETED,
+                            },
+                        )
 
                     return doc
                 except Exception as e:
@@ -90,6 +111,16 @@ class IngestionActivities:
                             file_id=file_payload.file_id,
                             status=INGESTION_STATUS.FAILED,
                             error_message=str(e),
+                        )
+                        await self._publish(
+                            f"jobs.{job_id}",
+                            {
+                                "type": "file_update",
+                                "job_id": job_id,
+                                "file_id": str(file_payload.file_id),
+                                "filename": file_payload.filename,
+                                "status": INGESTION_STATUS.FAILED,
+                            },
                         )
 
                     return None
@@ -133,3 +164,17 @@ class IngestionActivities:
             status=status,
             error_message=error_message,
         )
+
+        job = await self._repo.get_job(job_id)
+        if job:
+            await self._publish(
+                f"jobs.{job_id}",
+                {
+                    "type": "job_update",
+                    "job_id": job_id,
+                    "status": status,
+                    "total_files": job.get("total_files", 0),
+                    "files_completed": job.get("files_completed", 0),
+                    "files_failed": job.get("files_failed", 0),
+                },
+            )

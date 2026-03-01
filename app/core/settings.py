@@ -61,6 +61,11 @@ class Settings(BaseSettings):
         default=None, description="ScyllaDB authentication password"
     )
 
+    # NATS
+    NATS_URL: str = Field(
+        default="nats://localhost:4222", description="NATS server URL"
+    )
+
     # Minio
     MINIO_HOST: str = Field(..., description="Minio host name")
     MINIO_ACCESS_KEY: str = Field(..., description="Minio access key")
