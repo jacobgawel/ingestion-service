@@ -10,6 +10,7 @@ from app.clients import (
     get_qdrant_client,
     get_scylla_session,
 )
+from app.repositories import IngestionRepository
 from app.service import IngestionService, ScyllaService
 
 
@@ -29,3 +30,9 @@ def get_scylla_service(
     session: Session = Depends(get_scylla_session),
 ) -> ScyllaService:
     return ScyllaService(session=session)
+
+
+def get_ingestion_repository(
+    scylla: ScyllaService = Depends(get_scylla_service),
+) -> IngestionRepository:
+    return IngestionRepository(scylla=scylla)

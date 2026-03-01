@@ -11,7 +11,7 @@ from app.clients.scylla_client import close_scylla, initialize_scylla
 from app.clients.temporal_client import close_temporal, initialize_temporal
 from app.core.logger import configure_uvicorn_logging, get_logger
 from app.core.settings import config
-from app.routes import ingestion, jobs
+from app.routes import data, ingestion, jobs
 
 logger = get_logger("Lifespan")
 
@@ -57,6 +57,7 @@ app.add_middleware(
 
 app.include_router(ingestion.router)
 app.include_router(jobs.router)
+app.include_router(data.router)
 
 
 if __name__ == "__main__":

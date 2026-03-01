@@ -52,8 +52,9 @@ app/
 ├── clients/       # Singleton client managers (Temporal, MinIO, Qdrant, OpenAI, Mixedbread, ScyllaDB)
 ├── core/          # Settings (Pydantic BaseSettings), enums, logger, dependencies
 ├── models/        # Pydantic request/response models
-├── routes/        # FastAPI routers (ingestion, jobs WebSocket)
-├── service/       # Business logic (document processing, ScyllaDB query execution)
+├── repositories/  # Data-access layer (domain-specific DB queries per feature)
+├── routes/        # FastAPI routers (ingestion, jobs WebSocket, data)
+├── service/       # Business logic (document processing, generic ScyllaDB query execution)
 ├── temporal/      # Workflow definitions and activities
 └── worker.py      # Temporal worker entrypoint
 main.py            # FastAPI app entrypoint
@@ -62,9 +63,11 @@ main.py            # FastAPI app entrypoint
 ## Architecture Patterns
 
 - **Singleton pattern** for all client managers (lazy initialization, thread-safe)
+- **Repository pattern** for domain-specific DB queries (`app/repositories/`). Each feature gets its own repository file (e.g., `ingestion.py`). Repositories depend on `ScyllaService` for query execution.
 - **Dependency injection** via FastAPI's `Depends()` for client access in routes
 - **Async throughout** — AsyncQdrantClient, AsyncOpenAI, async context managers
-- **Temporal workflows** — 2-stage pipeline: Parse → Embed, with retries and heartbeats
+- **Temporal workflows** — 3-stage pipeline: Parse → Embed → Finalize, with retries and heartbeats
+- **Job tracking** — ScyllaDB tables (`ingestion_jobs`, `ingestion_files`) persist job/file status; schema auto-created on startup
 - **Concurrency control** — asyncio Semaphore (max 4 concurrent file operations)
 
 ## Environment Variables
@@ -79,7 +82,7 @@ Configured via `.env` file (loaded by Pydantic BaseSettings in `app/core/setting
 **Optional (have defaults):**
 - `TEMPORAL_HOST` (default: `localhost:7233`)
 - `QDRANT_HOST` (default: `localhost`), `QDRANT_PORT` (default: `6333`)
-- `SCYLLA_HOSTS` (default: `localhost`), `SCYLLA_PORT` (default: `9042`), `SCYLLA_KEYSPACE`, `SCYLLA_USERNAME`, `SCYLLA_PASSWORD`
+- `SCYLLA_HOSTS` (default: `localhost`), `SCYLLA_PORT` (default: `9042`), `SCYLLA_KEYSPACE` (default: `nexus`), `SCYLLA_USERNAME`, `SCYLLA_PASSWORD`
 - `PORT` (default: `8065`), `HOST` (default: `127.0.0.1`)
 
 ## Code Conventions

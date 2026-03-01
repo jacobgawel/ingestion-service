@@ -51,8 +51,8 @@ class Settings(BaseSettings):
     SCYLLA_PORT: int = Field(
         default=9042, description="ScyllaDB CQL native transport port"
     )
-    SCYLLA_KEYSPACE: str | None = Field(
-        default=None, description="Default ScyllaDB keyspace"
+    SCYLLA_KEYSPACE: str = Field(
+        default="nexus", description="Default ScyllaDB keyspace"
     )
     SCYLLA_USERNAME: str | None = Field(
         default=None, description="ScyllaDB authentication username"

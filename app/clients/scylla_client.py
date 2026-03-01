@@ -50,11 +50,57 @@ class ScyllaManager:
         """Initialize the ScyllaDB cluster and session. Must be called during app startup."""
         if not self.__class__._initialized:
             self._cluster = self._create_cluster()
-            self._session = self._cluster.connect(
-                keyspace=config.SCYLLA_KEYSPACE or None
-            )
+            self._session = self._cluster.connect()
+
+            self._create_schema()
+
+            self._session.set_keyspace(config.SCYLLA_KEYSPACE)
             logger.info("ScyllaDB client initialized successfully")
             self.__class__._initialized = True
+
+    def _create_schema(self) -> None:
+        """Create keyspace and tables if they don't exist."""
+        if self._session is None:
+            raise RuntimeError("Cannot create schema: session not connected")
+
+        self._session.execute(f"""
+            CREATE KEYSPACE IF NOT EXISTS {config.SCYLLA_KEYSPACE}
+            WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}
+            """)
+
+        self._session.set_keyspace(config.SCYLLA_KEYSPACE)
+
+        self._session.execute("""
+            CREATE TABLE IF NOT EXISTS ingestion_jobs (
+                job_id        TEXT PRIMARY KEY,
+                user_id       TEXT,
+                project_id    TEXT,
+                status        TEXT,
+                total_files   INT,
+                files_completed INT,
+                files_failed  INT,
+                created_at    TIMESTAMP,
+                updated_at    TIMESTAMP,
+                error_message TEXT
+            )
+            """)
+
+        self._session.execute("""
+            CREATE TABLE IF NOT EXISTS ingestion_files (
+                job_id        TEXT,
+                file_id       UUID,
+                filename      TEXT,
+                object_name   TEXT,
+                content_type  TEXT,
+                status        TEXT,
+                created_at    TIMESTAMP,
+                updated_at    TIMESTAMP,
+                error_message TEXT,
+                PRIMARY KEY (job_id, file_id)
+            )
+            """)
+
+        logger.info("ScyllaDB schema created (keyspace + tables)")
 
     @property
     def session(self) -> Session:
