@@ -11,7 +11,7 @@ Ingestion Service — a document ingestion and vector embedding pipeline built w
 - **Package Manager:** UV (astral-sh/uv)
 - **Workflow Engine:** Temporal
 - **Vector DB:** Qdrant
-- **Database:** ScyllaDB (via scyllapy)
+- **Database:** ScyllaDB (via scylla-driver)
 - **Object Storage:** MinIO (via boto3)
 - **Embeddings:** OpenAI / Mixedbread
 - **Document Parsing:** Docling
@@ -79,7 +79,7 @@ Configured via `.env` file (loaded by Pydantic BaseSettings in `app/core/setting
 **Optional (have defaults):**
 - `TEMPORAL_HOST` (default: `localhost:7233`)
 - `QDRANT_HOST` (default: `localhost`), `QDRANT_PORT` (default: `6333`)
-- `SCYLLA_HOSTS` (default: `localhost:9042`), `SCYLLA_KEYSPACE`, `SCYLLA_USERNAME`, `SCYLLA_PASSWORD`
+- `SCYLLA_HOSTS` (default: `localhost`), `SCYLLA_PORT` (default: `9042`), `SCYLLA_KEYSPACE`, `SCYLLA_USERNAME`, `SCYLLA_PASSWORD`
 - `PORT` (default: `8065`), `HOST` (default: `127.0.0.1`)
 
 ## Code Conventions

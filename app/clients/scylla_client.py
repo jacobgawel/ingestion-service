@@ -1,8 +1,10 @@
 """ScyllaDB client singleton instance."""
 
-from typing import Optional
+from typing import Any, Optional
 
-from scyllapy import Scylla
+from cassandra.auth import PlainTextAuthProvider
+from cassandra.cluster import Cluster, Session
+from cassandra.io.asyncioreactor import AsyncioConnection
 
 from app.core.logger import get_logger
 from app.core.settings import config
@@ -14,7 +16,8 @@ class ScyllaManager:
     """Singleton class for ScyllaDB client to ensure single instance across the application."""
 
     _instance: Optional["ScyllaManager"] = None
-    _client: Optional[Scylla] = None
+    _cluster: Optional[Cluster] = None
+    _session: Optional[Session] = None
     _initialized: bool = False
 
     def __new__(cls) -> "ScyllaManager":
@@ -23,48 +26,54 @@ class ScyllaManager:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def _create_client(self) -> Scylla:
-        """Create and configure the ScyllaDB client."""
+    def _create_cluster(self) -> Cluster:
+        """Create and configure the ScyllaDB cluster."""
         contact_points: list[str] = [
             host.strip() for host in config.SCYLLA_HOSTS.split(",")
         ]
 
-        kwargs: dict = {"contact_points": contact_points}
-
-        if config.SCYLLA_KEYSPACE:
-            kwargs["default_keyspace"] = config.SCYLLA_KEYSPACE
+        kwargs: dict[str, Any] = {
+            "contact_points": contact_points,
+            "port": config.SCYLLA_PORT,
+            "connection_class": AsyncioConnection,
+        }
 
         if config.SCYLLA_USERNAME and config.SCYLLA_PASSWORD:
-            kwargs["username"] = config.SCYLLA_USERNAME
-            kwargs["password"] = config.SCYLLA_PASSWORD
+            kwargs["auth_provider"] = PlainTextAuthProvider(
+                username=config.SCYLLA_USERNAME,
+                password=config.SCYLLA_PASSWORD,
+            )
 
-        return Scylla(**kwargs)
+        return Cluster(**kwargs)
 
     async def initialize(self) -> None:
-        """Initialize the ScyllaDB client. Must be called during app startup."""
+        """Initialize the ScyllaDB cluster and session. Must be called during app startup."""
         if not self.__class__._initialized:
-            self._client = self._create_client()
-            await self._client.startup()
+            self._cluster = self._create_cluster()
+            self._session = self._cluster.connect(
+                keyspace=config.SCYLLA_KEYSPACE or None
+            )
             logger.info("ScyllaDB client initialized successfully")
             self.__class__._initialized = True
 
     @property
-    def client(self) -> Scylla:
-        """Get the ScyllaDB client instance."""
-        if self._client is None:
+    def session(self) -> Session:
+        """Get the ScyllaDB session instance."""
+        if self._session is None:
             raise RuntimeError(
                 "ScyllaDB client not initialized. Call 'await scylla_manager.initialize()' first."
             )
-        return self._client
+        return self._session
 
     async def close(self) -> None:
-        """Close the ScyllaDB client connection."""
-        if self._client:
-            await self._client.shutdown()
+        """Close the ScyllaDB cluster connection."""
+        if self._cluster:
+            self._cluster.shutdown()
             logger.info("ScyllaDB client shut down")
             self.__class__._initialized = False
             self.__class__._instance = None
-            self._client = None
+            self._cluster = None
+            self._session = None
 
 
 # Create a singleton instance
@@ -81,11 +90,11 @@ async def close_scylla() -> None:
     await _scylla_singleton.close()
 
 
-def get_scylla_client() -> Scylla:
+def get_scylla_session() -> Session:
     """
-    Get the singleton ScyllaDB client instance.
+    Get the singleton ScyllaDB session instance.
 
     Returns:
-        Scylla: The singleton ScyllaDB client instance.
+        Session: The singleton ScyllaDB session instance.
     """
-    return _scylla_singleton.client
+    return _scylla_singleton.session

@@ -1,14 +1,14 @@
+from cassandra.cluster import Session
 from fastapi import Depends
 from mixedbread import AsyncMixedbread
 from openai import AsyncOpenAI
 from qdrant_client import AsyncQdrantClient
-from scyllapy import Scylla
 
 from app.clients import (
     get_mixedbread_client,
     get_openai_client,
     get_qdrant_client,
-    get_scylla_client,
+    get_scylla_session,
 )
 from app.service import IngestionService, ScyllaService
 
@@ -26,6 +26,6 @@ def get_ingestion_service(
 
 
 def get_scylla_service(
-    scylla_client: Scylla = Depends(get_scylla_client),
+    session: Session = Depends(get_scylla_session),
 ) -> ScyllaService:
-    return ScyllaService(scylla_client=scylla_client)
+    return ScyllaService(session=session)

@@ -45,8 +45,11 @@ class Settings(BaseSettings):
 
     # ScyllaDB
     SCYLLA_HOSTS: str = Field(
-        default="localhost:9042",
-        description="Comma-separated ScyllaDB contact points (host:port)",
+        default="localhost",
+        description="Comma-separated ScyllaDB contact points",
+    )
+    SCYLLA_PORT: int = Field(
+        default=9042, description="ScyllaDB CQL native transport port"
     )
     SCYLLA_KEYSPACE: str | None = Field(
         default=None, description="Default ScyllaDB keyspace"
