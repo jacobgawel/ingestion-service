@@ -69,6 +69,7 @@ class IngestionRepository:
     async def create_file(
         self,
         job_id: str,
+        user_id: str | None,
         project_id: str | None,
         filename: str | None,
         object_name: str,
@@ -80,12 +81,13 @@ class IngestionRepository:
         await self._scylla.execute_prepared_write(
             """
             INSERT INTO ingestion_files
-                (job_id, project_id, file_id, filename, object_name, content_type, status, created_at, updated_at, error_message)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (job_id, project_id, user_id, file_id, filename, object_name, content_type, status, created_at, updated_at, error_message)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
                 project_id,
+                user_id,
                 file_id,
                 filename,
                 object_name,

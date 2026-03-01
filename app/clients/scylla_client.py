@@ -118,6 +118,7 @@ class ScyllaManager:
                 job_id        TEXT,
                 project_id    TEXT,
                 file_id       UUID,
+                user_id       TEXT,
                 filename      TEXT,
                 object_name   TEXT,
                 content_type  TEXT,
@@ -137,6 +138,11 @@ class ScyllaManager:
         self._session.execute("""
             CREATE INDEX IF NOT EXISTS ingestion_files_project_id_idx
             ON nexus.ingestion_files (project_id);
+            """)
+
+        self._session.execute("""
+            CREATE INDEX IF NOT EXISTS ingestion_files_user_id_idx
+            ON nexus.ingestion_files (user_id);
             """)
 
         logger.info("ScyllaDB schema created (keyspace + tables)")

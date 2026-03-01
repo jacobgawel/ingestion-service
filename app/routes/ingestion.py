@@ -101,6 +101,7 @@ async def ingest_data(
             file_id = await repo.create_file(
                 job_id=job_id,
                 project_id=request_data.project_id,
+                user_id=request_data.user_id,
                 filename=payload.filename,
                 object_name=payload.object_name,
                 content_type=payload.content_type,
