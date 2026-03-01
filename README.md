@@ -2,6 +2,7 @@
 
 - Temporal
 - Qdrant
+- ScyllaDB
 - FastAPI
 - Docker
 

@@ -20,6 +20,7 @@ dependencies = [
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.0",
     "qdrant-client>=1.16.2",
+    "scylla-driver>=3.27.2",
     "temporalio>=1.22.0",
     "torch>=2.5.1",
     "torchaudio>=2.10.0",

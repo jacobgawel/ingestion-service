@@ -43,6 +43,24 @@ class Settings(BaseSettings):
         default="localhost:7233", description="Temporal server host"
     )
 
+    # ScyllaDB
+    SCYLLA_HOSTS: str = Field(
+        default="localhost",
+        description="Comma-separated ScyllaDB contact points",
+    )
+    SCYLLA_PORT: int = Field(
+        default=9042, description="ScyllaDB CQL native transport port"
+    )
+    SCYLLA_KEYSPACE: str = Field(
+        default="nexus", description="Default ScyllaDB keyspace"
+    )
+    SCYLLA_USERNAME: str | None = Field(
+        default=None, description="ScyllaDB authentication username"
+    )
+    SCYLLA_PASSWORD: str | None = Field(
+        default=None, description="ScyllaDB authentication password"
+    )
+
     # Minio
     MINIO_HOST: str = Field(..., description="Minio host name")
     MINIO_ACCESS_KEY: str = Field(..., description="Minio access key")
