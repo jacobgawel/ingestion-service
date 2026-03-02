@@ -115,11 +115,6 @@ class ScyllaManager:
             """)
 
         self._session.execute("""
-            CREATE INDEX IF NOT EXISTS ingestion_jobs_source_idx
-            ON nexus.ingestion_jobs (source);
-            """)
-
-        self._session.execute("""
             CREATE MATERIALIZED VIEW IF NOT EXISTS ingestion_jobs_by_source_project AS
                 SELECT *
                 FROM ingestion_jobs
