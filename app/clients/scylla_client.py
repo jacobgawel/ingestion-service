@@ -68,8 +68,8 @@ class ScyllaManager:
         -- job_id decides the node, file_id sorts rows within that node
 
         -- 3. Composite partition key
-        PRIMARY KEY ((user_id, project_id), file_id)
-        -- user_id AND project_id TOGETHER decide the node
+        PRIMARY KEY ((source, project_id), file_id)
+        -- source AND project_id TOGETHER decide the node
         -- meaning you must provide BOTH to query
     """
 
@@ -90,8 +90,8 @@ class ScyllaManager:
 
         self._session.execute("""
             CREATE TABLE IF NOT EXISTS ingestion_jobs (
-                job_id        TEXT PRIMARY KEY,
-                user_id       TEXT,
+                job_id        TEXT,
+                source        TEXT,
                 project_id    TEXT,
                 status        TEXT,
                 total_files   INT,
@@ -99,7 +99,8 @@ class ScyllaManager:
                 files_failed  INT,
                 created_at    TIMESTAMP,
                 updated_at    TIMESTAMP,
-                error_message TEXT
+                error_message TEXT,
+                PRIMARY KEY ((job_id), source)
             )
             """)
 
@@ -114,11 +115,26 @@ class ScyllaManager:
             """)
 
         self._session.execute("""
+            CREATE INDEX IF NOT EXISTS ingestion_jobs_source_idx
+            ON nexus.ingestion_jobs (source);
+            """)
+
+        self._session.execute("""
+            CREATE MATERIALIZED VIEW IF NOT EXISTS ingestion_jobs_by_source_project AS
+                SELECT *
+                FROM ingestion_jobs
+                WHERE source IS NOT NULL
+                  AND project_id IS NOT NULL
+                  AND job_id IS NOT NULL
+                PRIMARY KEY ((source, project_id), job_id)
+            """)
+
+        self._session.execute("""
             CREATE TABLE IF NOT EXISTS ingestion_files (
                 job_id        TEXT,
                 project_id    TEXT,
                 file_id       UUID,
-                user_id       TEXT,
+                source        TEXT,
                 filename      TEXT,
                 object_name   TEXT,
                 content_type  TEXT,
@@ -141,8 +157,8 @@ class ScyllaManager:
             """)
 
         self._session.execute("""
-            CREATE INDEX IF NOT EXISTS ingestion_files_user_id_idx
-            ON nexus.ingestion_files (user_id);
+            CREATE INDEX IF NOT EXISTS ingestion_files_source_idx
+            ON nexus.ingestion_files (source);
             """)
 
         logger.info("ScyllaDB schema created (keyspace + tables)")

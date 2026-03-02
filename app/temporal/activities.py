@@ -12,6 +12,7 @@ from app.core.enums import INGESTION_STATUS
 from app.core.logger import get_logger
 from app.core.temporal import INGESTION_ACTIVITY
 from app.models.workflows import (
+    FileProcessingContext,
     IngestionFilePayload,
     IngestionWorkflowRequest,
 )
@@ -49,11 +50,14 @@ class IngestionActivities:
         file_stream = get_minio_handler().get_file_stream(
             object_name=file_payload.object_name
         )
-        return self._ingestion_service.process_file(
-            request=request,
-            file=file_stream,
+
+        ctx = FileProcessingContext.from_request(
+            file_stream=file_stream,
             file_name=file_payload.filename or "default",
+            request=request,
         )
+
+        return self._ingestion_service.process_file(ctx)
 
     @activity.defn(name=INGESTION_ACTIVITY.PARSE_FILES)
     async def parse_files(
@@ -153,6 +157,7 @@ class IngestionActivities:
     async def finalize_job(
         self,
         job_id: str,
+        source: str,
         status: str,
         error_message: str | None,
     ) -> None:
@@ -161,6 +166,7 @@ class IngestionActivities:
         """
         await self._repo.finalize_job(
             job_id=job_id,
+            source=source,
             status=status,
             error_message=error_message,
         )

@@ -21,7 +21,7 @@ class IngestionRepository:
     async def create_job(
         self,
         job_id: str,
-        user_id: str | None,
+        source: str,
         project_id: str | None,
         total_files: int,
     ) -> None:
@@ -30,12 +30,12 @@ class IngestionRepository:
         await self._scylla.execute_prepared_write(
             """
             INSERT INTO ingestion_jobs
-                (job_id, user_id, project_id, status, total_files, files_completed, files_failed, created_at, updated_at, error_message)
+                (job_id, source, project_id, status, total_files, files_completed, files_failed, created_at, updated_at, error_message)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
-                user_id,
+                source,
                 project_id,
                 INGESTION_STATUS.IN_PROGRESS,
                 total_files,
@@ -51,6 +51,7 @@ class IngestionRepository:
     async def update_job_status(
         self,
         job_id: str,
+        source: str,
         status: str,
         error_message: str | None = None,
     ) -> None:
@@ -60,16 +61,16 @@ class IngestionRepository:
             """
             UPDATE ingestion_jobs
             SET status = ?, updated_at = ?, error_message = ?
-            WHERE job_id = ?
+            WHERE job_id = ? AND source = ?
             """,
-            (status, now, error_message, job_id),
+            (status, now, error_message, job_id, source),
         )
         logger.info(f"Updated job {job_id} status to {status}")
 
     async def create_file(
         self,
         job_id: str,
-        user_id: str | None,
+        source: str | None,
         project_id: str | None,
         filename: str | None,
         object_name: str,
@@ -81,13 +82,13 @@ class IngestionRepository:
         await self._scylla.execute_prepared_write(
             """
             INSERT INTO ingestion_files
-                (job_id, project_id, user_id, file_id, filename, object_name, content_type, status, created_at, updated_at, error_message)
+                (job_id, project_id, source, file_id, filename, object_name, content_type, status, created_at, updated_at, error_message)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
                 project_id,
-                user_id,
+                source,
                 file_id,
                 filename,
                 object_name,
@@ -127,6 +128,32 @@ class IngestionRepository:
             (job_id,),
         )
 
+    async def get_jobs(
+        self,
+        source: str | None = None,
+        project_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get ingestion jobs, optionally filtered by source and/or project_id."""
+        if source and project_id:
+            return await self._scylla.execute_prepared(
+                "SELECT * FROM ingestion_jobs_by_source_project WHERE source = ? AND project_id = ?",
+                (source, project_id),
+            )
+        elif source:
+            return await self._scylla.execute_prepared(
+                "SELECT * FROM ingestion_jobs WHERE source = ?",
+                (source,),
+            )
+        elif project_id:
+            return await self._scylla.execute_prepared(
+                "SELECT * FROM ingestion_jobs WHERE project_id = ?",
+                (project_id,),
+            )
+        else:
+            return await self._scylla.execute_prepared(
+                "SELECT * FROM ingestion_jobs",
+            )
+
     async def get_job_files(self, job_id: str) -> list[dict[str, Any]]:
         """Get all files for an ingestion job."""
         return await self._scylla.execute_prepared(
@@ -134,9 +161,25 @@ class IngestionRepository:
             (job_id,),
         )
 
+    async def get_job_file_summaries(self, job_id: str) -> list[dict[str, str]]:
+        """Get file_id, filename, and status for all files in a job."""
+        rows = await self._scylla.execute_prepared(
+            "SELECT file_id, filename, status FROM ingestion_files WHERE job_id = ?",
+            (job_id,),
+        )
+        return [
+            {
+                "file_id": str(row["file_id"]),
+                "filename": row["filename"],
+                "status": row["status"],
+            }
+            for row in rows
+        ]
+
     async def finalize_job(
         self,
         job_id: str,
+        source: str,
         status: str,
         error_message: str | None = None,
     ) -> None:
@@ -146,6 +189,7 @@ class IngestionRepository:
         files_completed = sum(
             1 for f in files if f["status"] == INGESTION_STATUS.COMPLETED
         )
+
         files_failed = sum(1 for f in files if f["status"] == INGESTION_STATUS.FAILED)
 
         now = datetime.now(timezone.utc)
@@ -153,9 +197,17 @@ class IngestionRepository:
             """
             UPDATE ingestion_jobs
             SET status = ?, files_completed = ?, files_failed = ?, updated_at = ?, error_message = ?
-            WHERE job_id = ?
+            WHERE job_id = ? AND source = ?
             """,
-            (status, files_completed, files_failed, now, error_message, job_id),
+            (
+                status,
+                files_completed,
+                files_failed,
+                now,
+                error_message,
+                job_id,
+                source,
+            ),
         )
         logger.info(
             f"Finalized job {job_id}: status={status}, completed={files_completed}, failed={files_failed}"

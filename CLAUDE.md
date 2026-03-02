@@ -54,7 +54,7 @@ app/
 ├── core/          # Settings (Pydantic BaseSettings), enums, logger, dependencies, constants
 ├── models/        # Pydantic request/response models (api.py, workflows.py)
 ├── repositories/  # Data-access layer (domain-specific DB queries per feature)
-├── routes/        # FastAPI routers (ingestion REST, jobs WebSocket)
+├── routes/        # FastAPI routers (ingestion REST, jobs REST + WebSocket)
 ├── service/       # Business logic (document processing, generic ScyllaDB query execution)
 ├── temporal/      # Workflow definitions and activities
 └── worker.py      # Temporal worker entrypoint
@@ -68,8 +68,8 @@ main.py            # FastAPI app entrypoint
 - **Dependency injection** via FastAPI's `Depends()` for client access in routes
 - **Async throughout** — AsyncQdrantClient, AsyncOpenAI, async context managers
 - **Temporal workflows** — 3-stage pipeline: Parse → Embed → Finalize, with retries (5 attempts, exponential backoff) and heartbeats
-- **Job tracking** — ScyllaDB tables (`ingestion_jobs`, `ingestion_files`) persist job/file status; schema auto-created on startup
-- **Event-driven updates** — NATS pub/sub decouples Temporal activities from WebSocket handlers; activities publish to `jobs.{job_id}` subjects, WebSocket route subscribes and relays to clients
+- **Job tracking** — ScyllaDB tables (`ingestion_jobs`, `ingestion_files`) persist job/file status; schema auto-created on startup. `ingestion_jobs` uses `PRIMARY KEY ((job_id), source)` where `source` is a non-null clustering key (user ID or `"api"` for programmatic usage). A materialized view `ingestion_jobs_by_source_project` (keyed on `(source, project_id)`) serves combined filters without `ALLOW FILTERING`. Secondary indexes on `source`, `project_id`, and `status` support single-column filters
+- **Event-driven updates** — NATS pub/sub decouples Temporal activities from WebSocket handlers; activities publish to `jobs.{job_id}` subjects, WebSocket route subscribes and relays to clients. Uses **subscribe-then-snapshot** pattern: NATS subscription is created before querying the DB so updates during the read are buffered in an `asyncio.Queue` and not lost (see `docs/websocket-job-updates.md`)
 - **Concurrency control** — asyncio Semaphore (max 4 concurrent file operations)
 
 ## Environment Variables

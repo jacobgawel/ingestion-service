@@ -1,5 +1,3 @@
-from io import BytesIO
-
 from docling.document_converter import DocumentConverter
 from docling_core.types.io import DocumentStream
 from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
@@ -13,6 +11,7 @@ from qdrant_client import AsyncQdrantClient
 from app.core.logger import get_logger
 from app.core.settings import config
 from app.models.workflows import (
+    FileProcessingContext,
     IngestionWorkflowRequest,
 )
 
@@ -44,32 +43,31 @@ class IngestionService:
         )
         logger.info("IngestionService initialized successfully")
 
-    def _parse_file(self, file: BytesIO, file_name: str) -> str:
+    def _parse_file(self, ctx: FileProcessingContext) -> str:
         """Process file"""
-        logger.info(f"Parsing file: {file_name}")
-        doc_stream = DocumentStream(name=file_name, stream=file)
+        logger.info(f"Parsing file: {ctx.file_name}")
 
-        conversion_result = self.converter.convert(doc_stream)
-        markdown_text = conversion_result.document.export_to_markdown()
+        if ctx.is_plain_text:
+            markdown_text = ctx.file_stream.read().decode("utf-8")
+        else:
+            doc_stream = DocumentStream(name=ctx.file_name, stream=ctx.file_stream)
+            conversion_result = self.converter.convert(doc_stream)
+            markdown_text = conversion_result.document.export_to_markdown()
 
-        logger.info(f"Successfully parsed file: {file_name}")
+        logger.info(f"Successfully parsed file: {ctx.file_name}")
         return markdown_text
 
-    def process_file(
-        self, request: IngestionWorkflowRequest, file: BytesIO, file_name: str
-    ) -> Document:
-
-        result = self._parse_file(file=file, file_name=file_name)
-        processed_file = Document(
+    def process_file(self, ctx: FileProcessingContext) -> Document:
+        result = self._parse_file(ctx)
+        return Document(
             text=result,
             metadata={
-                "filename": file_name,
-                "user_id": request.user_id,
-                "project_id": request.project_id,
+                "filename": ctx.file_name,
+                "file_extension": ctx.file_extension,
+                "source": ctx.source,
+                "project_id": ctx.project_id,
             },
         )
-
-        return processed_file
 
     async def embed_markdown(
         self,
@@ -83,7 +81,7 @@ class IngestionService:
         logger.info(f"Created {len(nodes)} nodes from documents")
 
         for node in nodes:
-            node.metadata["user_id"] = request.user_id
+            node.metadata["source"] = request.source
             node.metadata["project_id"] = request.project_id
 
         storage_context = StorageContext.from_defaults(vector_store=self.vector_store)

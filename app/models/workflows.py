@@ -1,7 +1,8 @@
+from io import BytesIO
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class IngestionFilePayload(BaseModel):
@@ -12,12 +13,49 @@ class IngestionFilePayload(BaseModel):
 
 
 class IngestionWorkflowRequest(BaseModel):
-    user_id: Optional[str] = Field(
-        None, description="Optional field that will append a user_id for filtering"
+    source: Optional[str] = Field(
+        None, description="Optional field that will append a source for filtering"
     )
     project_id: Optional[str] = Field(
         None, description="ID of the project that this will be associated with"
     )
+
+
+class FileProcessingContext(BaseModel):
+    """Contains all required info for processing a single file."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    file_stream: BytesIO
+    file_name: str
+    source: Optional[str] = None
+    project_id: Optional[str] = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def file_extension(self) -> str:
+        return (
+            self.file_name.rsplit(".", 1)[-1].lower() if "." in self.file_name else ""
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_plain_text(self) -> bool:
+        return self.file_extension == "txt"
+
+    @classmethod
+    def from_request(
+        cls,
+        file_stream: BytesIO,
+        file_name: str,
+        request: IngestionWorkflowRequest,
+    ) -> "FileProcessingContext":
+        return cls(
+            file_stream=file_stream,
+            file_name=file_name,
+            source=request.source,
+            project_id=request.project_id,
+        )
 
 
 class IngestionWorkflowDTO(BaseModel):
@@ -26,3 +64,8 @@ class IngestionWorkflowDTO(BaseModel):
         ..., description="The request object that's being passed into ingest"
     )
     files: List[IngestionFilePayload] = Field(..., description="Files to process")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def source(self) -> str:
+        return self.request.source or "api"

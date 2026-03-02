@@ -37,7 +37,7 @@ async def ingest_data(
     repo: IngestionRepository = Depends(get_ingestion_repository),
 ) -> IngestionResponse:
     logger.info(
-        f"Received ingestion request: user_id={request_data.user_id}, project_id={request_data.project_id}, files={len(files)}"
+        f"Received ingestion request: source={request_data.source}, project_id={request_data.project_id}, files={len(files)}"
     )
     client = get_temporal_client()
     minio = get_minio_handler()
@@ -89,10 +89,17 @@ async def ingest_data(
 
         logger.info(f"Finished uploading: {len(files_in_memory)} files")
 
-        # Phase 3: Create ScyllaDB records
+        # Phase 3: Build workflow DTO
+        workflow_dto = IngestionWorkflowDTO(
+            job_id=job_id,
+            request=IngestionWorkflowRequest(**request_data.model_dump()),
+            files=file_payloads,
+        )
+
+        # Phase 4: Create ScyllaDB records
         await repo.create_job(
             job_id=job_id,
-            user_id=request_data.user_id,
+            source=workflow_dto.source,
             project_id=request_data.project_id,
             total_files=len(file_payloads),
         )
@@ -101,23 +108,17 @@ async def ingest_data(
             file_id = await repo.create_file(
                 job_id=job_id,
                 project_id=request_data.project_id,
-                user_id=request_data.user_id,
+                source=workflow_dto.source,
                 filename=payload.filename,
                 object_name=payload.object_name,
                 content_type=payload.content_type,
             )
             payload.file_id = file_id
 
-        # Phase 4: Start Temporal workflow
+        # Phase 5: Start Temporal workflow
         handle = await client.start_workflow(
             INGESTION_WORKFLOW.WORKFLOW,
-            args=[
-                IngestionWorkflowDTO(
-                    job_id=job_id,
-                    request=IngestionWorkflowRequest(**request_data.model_dump()),
-                    files=file_payloads,
-                )
-            ],
+            args=[workflow_dto],
             id=job_id,
             task_queue=WORKER_QUEUE.INGESTION,
         )
@@ -149,27 +150,6 @@ async def get_job_status(
     files = await repo.get_job_files(job_id)
 
     return JobStatusResponse(
-        job_id=job["job_id"],
-        user_id=job.get("user_id"),
-        project_id=job.get("project_id"),
-        status=job["status"],
-        total_files=job.get("total_files", 0),
-        files_completed=job.get("files_completed", 0),
-        files_failed=job.get("files_failed", 0),
-        created_at=job.get("created_at"),
-        updated_at=job.get("updated_at"),
-        error_message=job.get("error_message"),
-        files=[
-            FileStatusResponse(
-                file_id=f["file_id"],
-                filename=f.get("filename"),
-                object_name=f["object_name"],
-                content_type=f.get("content_type"),
-                status=f["status"],
-                created_at=f.get("created_at"),
-                updated_at=f.get("updated_at"),
-                error_message=f.get("error_message"),
-            )
-            for f in files
-        ],
+        **job,
+        files=[FileStatusResponse(**f) for f in files],
     )

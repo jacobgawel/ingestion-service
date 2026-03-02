@@ -40,7 +40,12 @@ class IngestionWorkflow:
             # --- STEP 3: FINALIZE (success) ---
             await workflow.execute_activity(
                 INGESTION_ACTIVITY.FINALIZE_JOB,
-                args=[workflow_dto.job_id, INGESTION_STATUS.COMPLETED, None],
+                args=[
+                    workflow_dto.job_id,
+                    workflow_dto.source,
+                    INGESTION_STATUS.COMPLETED,
+                    None,
+                ],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=common_retry_policy,
             )
@@ -53,6 +58,7 @@ class IngestionWorkflow:
                 INGESTION_ACTIVITY.FINALIZE_JOB,
                 args=[
                     workflow_dto.job_id,
+                    workflow_dto.source,
                     INGESTION_STATUS.FAILED,
                     str(e),
                 ],
