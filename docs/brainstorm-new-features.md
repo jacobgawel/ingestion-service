@@ -1643,3 +1643,742 @@ If you're building the full Nexus platform, here's the infrastructure stack:
 | **DNS/TLS** | Cloudflare (proxy) + cert-manager | Automatic HTTPS, DDoS protection |
 | **Object storage** | MinIO (self-hosted) or R2 (cloud) | You already run MinIO |
 | **Package registry** | GitHub Container Registry (ghcr.io) | Free for public, integrated with GitHub Actions |
+
+---
+---
+
+# Drop-In Bleeding-Edge Tech You Can Actually Use
+
+Not patterns to study — actual technology you can swap into your stack today. Each entry maps directly to a component in your current `docker-compose.yml`, `pyproject.toml`, or `app/clients/`. Organized by what they replace.
+
+---
+
+## REPLACE: LlamaIndex Embedding Pipeline → Direct OpenAI Batch + Custom Chunker
+
+**What you currently have:** LlamaIndex `VectorStoreIndex` + `MarkdownNodeParser` + `OpenAIEmbedding` in `embed_markdown()`. LlamaIndex wraps OpenAI calls, manages node→vector→Qdrant insertion, but adds abstraction overhead and limits control over batching.
+
+**Replace with:** Call OpenAI and Qdrant directly. You already have both clients as singletons. Cut out the middleman.
+
+```python
+# app/service/ingestion.py — replace the LlamaIndex VectorStoreIndex path
+
+from llama_index.core.node_parser import MarkdownNodeParser  # keep just the parser
+from qdrant_client.models import PointStruct
+import uuid
+
+async def embed_and_store(
+    documents: list[Document],
+    qdrant: AsyncQdrantClient,
+    openai: AsyncOpenAI,
+    collection: str,
+    project_id: str,
+    source: str,
+    batch_size: int = 512,
+) -> int:
+    parser = MarkdownNodeParser()
+    nodes = parser.get_nodes_from_documents(documents)
+
+    total_stored = 0
+    for i in range(0, len(nodes), batch_size):
+        batch = nodes[i : i + batch_size]
+        texts = [node.get_content() for node in batch]
+
+        # Single API call for entire batch — 50x fewer round trips
+        response = await openai.embeddings.create(
+            model="text-embedding-3-small",
+            input=texts,
+            dimensions=1536,
+        )
+
+        points = [
+            PointStruct(
+                id=str(uuid.uuid4()),
+                vector=emb.embedding,
+                payload={
+                    "text": texts[j],
+                    "source": source,
+                    "project_id": project_id,
+                    "node_id": batch[j].node_id,
+                },
+            )
+            for j, emb in enumerate(response.data)
+        ]
+
+        # Fire-and-forget — Temporal retries handle durability
+        await qdrant.upsert(
+            collection_name=collection,
+            points=points,
+            wait=False,
+        )
+        total_stored += len(points)
+
+    return total_stored
+```
+
+**What you gain:**
+- Remove `llama-index-core`, `llama-index-embeddings-openai`, `llama-index-vector-stores-qdrant` from `pyproject.toml` — that's **hundreds of transitive deps** gone
+- 50x fewer API calls (batch 512 texts per request instead of 1)
+- Direct control over Qdrant point payloads (add any metadata you want)
+- `wait=False` for 2-3x write throughput
+- ~200MB smaller Docker image without LlamaIndex's dependency tree
+
+**What you keep:** `MarkdownNodeParser` is genuinely useful. You can vendor just that one file (~200 lines) if you want to fully drop LlamaIndex.
+
+---
+
+## REPLACE: Docling → Marker (Faster PDF→Markdown)
+
+**What you currently have:** `docling>=2.73.1` converts documents to Markdown. It works but it's heavy (pulls in PyTorch vision models, ~2GB of model weights).
+
+**Replace with:** **Marker** by VikParuchuri — purpose-built for high-speed, high-quality PDF→Markdown conversion. Created by the developer behind Surya OCR. Used by many AI companies for document processing pipelines.
+
+```toml
+# pyproject.toml — swap docling for marker
+dependencies = [
+    "marker-pdf>=1.6.0",  # replaces docling
+    # ...
+]
+```
+
+```python
+# app/service/ingestion.py — swap the converter
+from marker.converters.pdf import PdfConverter
+from marker.config.parser import ConfigParser
+
+config_parser = ConfigParser({"output_format": "markdown"})
+converter = PdfConverter(config=config_parser)
+
+async def parse_document(file_stream: BytesIO, filename: str) -> str:
+    rendered = await asyncio.to_thread(converter, file_stream)
+    return rendered.markdown
+```
+
+**Why Marker is bleeding edge:**
+- **2-3x faster** than Docling for PDF processing
+- **Better table extraction** — uses a dedicated table recognition model
+- **Better equation handling** — converts LaTeX equations correctly
+- **Surya OCR engine** — state-of-the-art open-source OCR, competitive with commercial solutions
+- **Smaller memory footprint** — optimized model loading
+
+**Trade-off:** Docling supports more formats (Word, Excel, PowerPoint). Marker is PDF-only but does PDF significantly better. Use both — Marker for PDFs, Docling as fallback for non-PDF formats.
+
+---
+
+## REPLACE: OpenAI Embeddings → Jina AI Embeddings v3
+
+**What you currently have:** `text-embedding-3-small` via OpenAI API (1536 dimensions, $0.02/1M tokens).
+
+**Add or replace with:** **Jina Embeddings v3** — supports 8192 token context (vs OpenAI's 8191), built-in **Matryoshka representation** (truncate to any dimension without quality loss), and **task-specific LoRA adapters** (retrieval.query, retrieval.passage, separation, classification).
+
+```python
+# app/clients/jina_client.py
+import httpx
+
+class JinaEmbeddingClient:
+    def __init__(self, api_key: str) -> None:
+        self.client = httpx.AsyncClient(
+            base_url="https://api.jina.ai/v1",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=60.0,
+        )
+
+    async def embed(
+        self,
+        texts: list[str],
+        task: str = "retrieval.passage",  # or retrieval.query for search
+        dimensions: int = 1024,
+    ) -> list[list[float]]:
+        response = await self.client.post(
+            "/embeddings",
+            json={
+                "model": "jina-embeddings-v3",
+                "input": texts,
+                "task": task,
+                "dimensions": dimensions,  # Matryoshka — use 256 for fast, 1024 for quality
+            },
+        )
+        data = response.json()
+        return [item["embedding"] for item in data["data"]]
+```
+
+**Why Jina v3 is bleeding edge:**
+- **Task-specific adapters** — tell the model whether the text is a query or a passage. Retrieval quality jumps 5-10% because the model optimizes the embedding space for each role.
+- **Matryoshka dimensions** — store 256-dim vectors for fast filtering (4x less storage, 4x faster search), then re-rank with 1024-dim. One model, two tiers.
+- **Late chunking** — Jina's API can accept a long document and embed overlapping chunks in a single call, preserving cross-chunk context. No external chunking needed.
+- **Multilingual** — 89 languages out of the box.
+
+**Also consider:** **Cohere Embed v4** (multimodal — embeds text AND images in the same vector space, so diagrams are searchable) or **Voyage AI 3.5** (best-in-class code embedding, if your corpus includes source code).
+
+---
+
+## REPLACE: NATS → NATS JetStream (Already Have NATS, Just Enable Persistence)
+
+**What you currently have:** NATS core pub/sub — fire-and-forget messaging in `nats_client.py`. If a subscriber isn't connected when a message is published, the message is lost.
+
+**Upgrade to:** **NATS JetStream** — adds persistence, replay, exactly-once delivery, and consumer groups. Zero new infrastructure — JetStream is built into the NATS binary you're already running.
+
+```yaml
+# docker-compose.yml — just add the -js flag
+nats:
+  image: nats:latest
+  command: ["-js", "-m", "8222"]  # enable JetStream + monitoring
+  ports:
+    - "4222:4222"
+    - "8222:8222"  # monitoring dashboard
+```
+
+```python
+# app/clients/nats_client.py — upgrade to JetStream
+async def initialize(self) -> None:
+    self._nc = await nats.connect(config.NATS_URL)
+    self._js = self._nc.jetstream()
+
+    # Create a stream for job events — persisted to disk
+    await self._js.add_stream(
+        name="JOBS",
+        subjects=["jobs.>"],
+        retention="limits",
+        max_age=86400 * 7,  # 7 day retention
+        storage="file",
+    )
+
+async def publish(self, subject: str, data: bytes) -> None:
+    # Guaranteed delivery — JetStream acks after persistence
+    await self._js.publish(subject, data)
+
+async def subscribe(self, subject: str) -> nats.js.JetStreamContext.PushSubscription:
+    # Durable consumer — resumes from where it left off after disconnect
+    return await self._js.subscribe(
+        subject,
+        durable="job-watcher",
+        deliver_policy="last_per_subject",
+    )
+```
+
+**What you gain:**
+- **Message replay** — new WebSocket connections can replay all events for a job, not just future ones. Fixes the subscribe-then-snapshot race condition entirely.
+- **Guaranteed delivery** — if a subscriber disconnects and reconnects, it gets all missed messages. No lost updates.
+- **Consumer groups** — scale WebSocket handlers horizontally. NATS distributes messages across consumers.
+- **Key-value store** — JetStream includes a built-in KV store. Could replace ScyllaDB for simple job status lookups:
+  ```python
+  kv = await js.key_value("job_status")
+  await kv.put(f"jobs.{job_id}", status_json)
+  entry = await kv.get(f"jobs.{job_id}")
+  ```
+- **Object store** — JetStream can store large objects (files). Could supplement MinIO for small files.
+
+---
+
+## ADD: Valkey (Redis Fork by Linux Foundation)
+
+**What you currently don't have:** No caching layer. Every request hits ScyllaDB and Qdrant directly.
+
+**Add:** **Valkey** — the Linux Foundation's community fork of Redis, created after Redis relicensed. Fully Redis-compatible. AWS, Google, Oracle, Ericsson, and Snap all back it.
+
+```yaml
+# docker-compose.yml
+valkey:
+  image: valkey/valkey:latest
+  ports:
+    - "6379:6379"
+  command: ["valkey-server", "--save", "60", "1000", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+```
+
+```python
+# app/clients/valkey_client.py
+import valkey.asyncio as valkey
+
+class ValkeyManager:
+    _instance: "ValkeyManager | None" = None
+    _client: valkey.Valkey | None = None
+
+    async def initialize(self) -> None:
+        self._client = valkey.Valkey(
+            host=config.VALKEY_HOST,
+            port=config.VALKEY_PORT,
+            decode_responses=True,
+        )
+
+    async def get(self, key: str) -> str | None:
+        return await self._client.get(key)
+
+    async def set(self, key: str, value: str, ttl: int = 3600) -> None:
+        await self._client.set(key, value, ex=ttl)
+
+    async def cache_embedding(self, content_hash: str, embedding: list[float]) -> None:
+        """Cache embedding by content hash — avoid re-embedding identical chunks."""
+        import json
+        await self._client.set(
+            f"emb:{content_hash}",
+            json.dumps(embedding),
+            ex=86400 * 7,  # 7 day TTL
+        )
+```
+
+**Use cases in your project:**
+- **Embedding cache** — hash chunk text → cache embedding. If the same text appears in multiple documents (boilerplate, headers, legal disclaimers), skip the OpenAI API call entirely. 10-40% of chunks are often duplicates.
+- **Job status cache** — `GET /jobs/{job_id}` reads from Valkey first (1ms) before hitting ScyllaDB (5-10ms).
+- **Rate limiting** — sliding window counters per API key/source.
+- **Idempotency keys** — prevent duplicate ingestion (idea #80).
+
+**Why Valkey over Redis:** Identical API, fully open source (BSD license), backed by Linux Foundation. No licensing risk. AWS ElastiCache already runs Valkey.
+
+---
+
+## REPLACE: ScyllaDB Driver → ScyllaDB Rust Driver via PyO3
+
+**What you currently have:** `scylla-driver>=3.27.2` (Python Cassandra driver with async wrapper). Your `ScyllaService._await_future()` manually bridges Cassandra's `ResponseFuture` to asyncio — this works but adds overhead per query.
+
+**Bleeding edge alternative:** **scylla-rust-driver** exposed to Python via PyO3. The Rust driver is ScyllaDB's official next-gen driver — shard-aware routing, prepared statement caching, and token-aware load balancing are all built in.
+
+The community project `scyllaft` wraps the Rust driver for Python:
+
+```toml
+# pyproject.toml
+dependencies = [
+    "scyllaft>=0.3.0",  # Rust-based ScyllaDB driver via PyO3
+]
+```
+
+```python
+# app/clients/scylla_client.py — native async, no ResponseFuture bridging
+from scyllaft import Scylla, InlineBatch
+
+class ScyllaManager:
+    async def initialize(self) -> None:
+        self._client = Scylla(
+            contact_points=[config.SCYLLA_HOSTS],
+            keyspace=config.SCYLLA_KEYSPACE,
+        )
+        await self._client.startup()
+
+    async def execute(self, query: str, params: list | None = None) -> list[dict]:
+        result = await self._client.execute(query, params or [])
+        return result.all_rows()  # native async — no Future bridging needed
+```
+
+**Why this is better:**
+- **Shard-aware routing** — requests go directly to the CPU core that owns the partition. The Python driver routes to nodes, but the Rust driver routes to specific shards within nodes. This is ScyllaDB's killer feature and the Python driver doesn't support it.
+- **Native async** — no `asyncio.Future` bridging, no thread pool overhead
+- **Connection pooling per shard** — optimal throughput on multi-core ScyllaDB nodes
+- **2-5x lower latency** at P99
+
+---
+
+## ADD: Turbopuffer (Serverless Vector Database)
+
+**What you currently have:** Self-hosted Qdrant (great for control, needs ops).
+
+**Add as a secondary option:** **Turbopuffer** — a serverless vector database built on object storage. Created by ex-Cloudflare engineers. The key insight: store vectors on S3/R2 and use aggressive caching + custom indexing to make it fast.
+
+**Why it's interesting:**
+- **10x cheaper** than hosted Qdrant/Pinecone at scale — object storage costs pennies per GB vs SSD-backed databases
+- **Infinite scale** — storage is S3, so you never run out of disk. Index 10 billion vectors without provisioning anything.
+- **Namespace isolation** — each project gets its own namespace. Multi-tenancy without collection-per-tenant overhead.
+- **Attribute filtering** — fast metadata filtering built into the index (not post-filter). Filter by project_id + source while doing vector search, without scanning irrelevant vectors.
+
+```python
+# app/clients/turbopuffer_client.py
+import turbopuffer as tpuf
+
+ns = tpuf.Namespace("nexus_knowledge_base")
+
+# Upsert with metadata
+ns.upsert(
+    ids=[...],
+    vectors=[...],
+    attributes={
+        "project_id": [...],
+        "source": [...],
+        "text": [...],
+    },
+)
+
+# Search with metadata filter
+results = ns.query(
+    vector=query_embedding,
+    top_k=10,
+    filters={"project_id": ["Eq", "my-project"]},
+    include_attributes=["text", "source"],
+)
+```
+
+**Use case:** Keep Qdrant for self-hosted/dev and offer Turbopuffer as the production backend. The interface is similar enough to abstract behind a common protocol.
+
+---
+
+## REPLACE: boto3 for MinIO → Native MinIO SDK (or rclone for Transfers)
+
+**What you currently have:** `boto3>=1.42.49` for S3 operations. boto3 is AWS's SDK — it works with MinIO but it's massive (70MB+), pulls in botocore, has complex auth, and wasn't designed for MinIO.
+
+**Replace with:** The **native MinIO Python SDK** — purpose-built, much lighter, supports MinIO-specific features.
+
+```toml
+# pyproject.toml — you already have minio, just drop boto3
+dependencies = [
+    "minio>=7.2.20",  # you already have this!
+    # "boto3>=1.42.49",  # remove — 70MB+ savings
+]
+```
+
+```python
+# app/clients/minio_client.py — you may already be using this for some ops
+from minio import Minio
+
+client = Minio(
+    config.MINIO_HOST.replace("http://", ""),
+    access_key=config.MINIO_ACCESS_KEY,
+    secret_key=config.MINIO_SECRET_KEY,
+    secure=False,
+)
+
+# Streaming upload — no memory buffering
+client.put_object(
+    "ingestion-bucket",
+    object_name,
+    data=file.file,  # stream directly from upload
+    length=-1,
+    part_size=10 * 1024 * 1024,
+)
+```
+
+**What you gain:**
+- Drop boto3 + botocore + s3transfer (~70MB of deps)
+- MinIO-specific features: server-side encryption, bucket notifications, object locking
+- Simpler API (no `resource` vs `client` confusion)
+
+**Bleeding edge addition:** For bulk transfers (migrating data between MinIO and S3/R2/GCS), use **rclone** — a single Go binary that supports 50+ cloud storage backends with parallel transfers, bandwidth limiting, and checksumming.
+
+---
+
+## ADD: Granian (Replace Uvicorn)
+
+**What you currently have:** Uvicorn as your ASGI server (via `fastapi[standard]`).
+
+**Replace with:** **Granian** — a Rust-based ASGI/WSGI server. 2-3x higher throughput than Uvicorn for FastAPI apps, with lower memory usage.
+
+```toml
+# pyproject.toml
+dependencies = [
+    "granian>=2.2.0",
+]
+```
+
+```python
+# main.py
+if __name__ == "__main__":
+    from granian import Granian
+    from granian.constants import Interfaces
+
+    server = Granian(
+        "main:app",
+        address=config.HOST,
+        port=config.PORT,
+        interface=Interfaces.ASGI,
+        workers=4,
+        threading_mode="runtime",  # Rust tokio runtime per worker
+    )
+    server.serve()
+```
+
+**Why Granian is bleeding edge:**
+- **Rust HTTP parser** — the HTTP layer runs in Rust, only calling into Python for your application code. Parsing, routing, and connection management are all native speed.
+- **Tokio runtime** — each worker gets a Rust async runtime. Fewer Python threads, less GIL contention.
+- **RSGIs** — Granian's own protocol (Rust Server Gateway Interface), even faster than ASGI for Rust-aware frameworks.
+- **2-3x throughput** on benchmarks vs Uvicorn for typical FastAPI workloads.
+- **Used by:** Pydantic (their docs site), various AI startups for inference APIs.
+
+---
+
+## ADD: Redpanda (Replace or Supplement NATS for Heavy Streaming)
+
+**What you currently have:** NATS for pub/sub.
+
+**Add for streaming workloads:** **Redpanda** — a Kafka-compatible streaming platform written in C++. No JVM, no ZooKeeper, single binary, 10x lower tail latency than Kafka.
+
+```yaml
+# docker-compose.yml
+redpanda:
+  image: redpandadata/redpanda:latest
+  command:
+    - redpanda start
+    - --smp 1
+    - --memory 1G
+    - --mode dev-container
+    - --kafka-addr 0.0.0.0:9092
+    - --schema-registry-addr 0.0.0.0:8081
+  ports:
+    - "9092:9092"   # Kafka API
+    - "8081:8081"   # Schema Registry
+    - "9644:9644"   # Admin API
+```
+
+**Why Redpanda over Kafka:**
+- **No JVM** — single C++ binary, starts in 2 seconds, uses 10x less memory
+- **Kafka API compatible** — use `aiokafka` or `confluent-kafka-python`, no new client library
+- **Built-in Schema Registry** — Avro/Protobuf/JSON schema management included
+- **Tiered storage** — automatically offload old data to S3/MinIO. Keep hot data on SSD, cold data on object storage.
+- **Data transforms** — run Wasm functions inside the broker to transform data in-flight (filter, enrich, route). No external stream processor needed.
+- **Used by:** Cisco, HP Enterprise, Palo Alto Networks, and hundreds of companies replacing Kafka.
+
+**When to use Redpanda vs NATS:**
+- NATS JetStream: lightweight pub/sub, job events, WebSocket relay (your current use case)
+- Redpanda: high-throughput ordered event streams, CDC ingestion, audit logs, cross-service event sourcing
+
+---
+
+## ADD: DuckDB (In-Process Analytics)
+
+**No separate server needed.** DuckDB is an in-process OLAP database (like SQLite but for analytics). Runs inside your Python process.
+
+```toml
+# pyproject.toml
+dependencies = [
+    "duckdb>=1.2.0",
+]
+```
+
+```python
+# Query your ScyllaDB data analytically — without a separate analytics DB
+import duckdb
+
+async def get_ingestion_analytics(scylla_service: ScyllaService) -> dict:
+    # Pull data from ScyllaDB
+    jobs = await scylla_service.execute("SELECT * FROM ingestion_jobs")
+
+    # Analyze with SQL — joins, window functions, aggregations
+    conn = duckdb.connect()
+    conn.register("jobs", jobs)
+
+    result = conn.sql("""
+        SELECT
+            source,
+            project_id,
+            status,
+            COUNT(*) as job_count,
+            AVG(files_completed) as avg_files_completed,
+            SUM(files_failed) as total_failures,
+            DATE_TRUNC('hour', created_at) as hour
+        FROM jobs
+        GROUP BY source, project_id, status, hour
+        ORDER BY hour DESC
+    """).fetchall()
+
+    return result
+```
+
+**Why DuckDB is cool:**
+- **Zero infrastructure** — no server, no container, no port. It's a Python import.
+- **Reads Parquet from MinIO directly** — `SELECT * FROM read_parquet('s3://ingestion-bucket/*.parquet')` with MinIO credentials.
+- **Vectorized execution** — columnar engine processes millions of rows in milliseconds.
+- **Used by:** MotherDuck (serverless DuckDB), Google (BigQuery migration tool), dbt Labs, and practically every data team.
+
+---
+
+## ADD: Hatchet (Next-Gen Task Queue / Workflow Engine)
+
+**What you currently have:** Temporal for workflow orchestration.
+
+**Add or evaluate:** **Hatchet** — a newer workflow engine built specifically for AI workloads. Written in Go, with a Python SDK that feels more Pythonic than Temporal's.
+
+```python
+from hatchet_sdk import Hatchet, Context
+
+hatchet = Hatchet()
+
+@hatchet.workflow(on_events=["ingestion:start"])
+class IngestionWorkflow:
+
+    @hatchet.step(timeout="10m", retries=5)
+    async def parse(self, context: Context) -> dict:
+        job_id = context.workflow_input()["job_id"]
+        # ... parse logic
+        return {"documents": docs}
+
+    @hatchet.step(parents=["parse"], timeout="10m")
+    async def embed(self, context: Context) -> dict:
+        docs = context.step_output("parse")["documents"]
+        # ... embed logic
+        return {"count": len(docs)}
+
+    @hatchet.step(parents=["embed"], timeout="30s")
+    async def finalize(self, context: Context) -> None:
+        # ... finalize logic
+        pass
+```
+
+**Why Hatchet is interesting:**
+- **DAG-based** — steps declare parent dependencies, engine resolves execution order. More flexible than Temporal's sequential activity model for AI pipelines.
+- **Built-in rate limiting** — limit per-tenant or per-model API calls at the engine level. No application-level semaphores.
+- **Concurrency control** — max N concurrent workflows per key (per-project, per-user). Replace your `asyncio.Semaphore(4)`.
+- **Event-driven** — workflows trigger on events, not just RPC calls. Publish an event, all matching workflows run.
+- **Sticky workers** — route workflows to workers with specific capabilities (GPU, high-memory). No Temporal task queue configuration needed.
+- **Newer, lighter** — single Go binary + Postgres. No Cassandra/Elasticsearch like Temporal requires.
+
+**Trade-off:** Temporal is battle-tested at Uber/Netflix/Stripe scale. Hatchet is newer but architecturally better suited for AI pipelines specifically.
+
+---
+
+## ADD: Quickwit (Log-Optimized Search Engine)
+
+**What you currently have:** No full-text search or log aggregation.
+
+**Add:** **Quickwit** — a cloud-native search engine built on Tantivy (Rust). Stores indexes on object storage (MinIO!). 10x cheaper than Elasticsearch.
+
+```yaml
+# docker-compose.yml
+quickwit:
+  image: quickwit/quickwit:latest
+  command: ["run"]
+  ports:
+    - "7280:7280"
+  environment:
+    QW_S3_ENDPOINT: http://minio:9000
+    AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY}
+    AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY}
+  volumes:
+    - ./quickwit-config:/quickwit/config
+```
+
+**Use cases:**
+- **Full-text search over ingested documents** — Qdrant handles semantic search, Quickwit handles keyword/exact match. Combine results for hybrid retrieval.
+- **Ingestion pipeline logs** — aggregate logs from FastAPI, Temporal workers, and activities. Query with sub-second latency.
+- **Audit trail** — index every ingestion event (who uploaded what, when, what happened). Quickwit's object-storage backend means retention is essentially free.
+
+**Why it's bleeding edge:**
+- **Tantivy** (Rust search engine) — 5-10x faster indexing than Elasticsearch's Lucene
+- **Object storage native** — indexes live on MinIO/S3. No SSD provisioning, no disk management.
+- **Kafka/Redpanda native** — ingest directly from Kafka topics with exactly-once semantics.
+- **OpenTelemetry native** — accepts OTLP traces and logs directly, no Logstash/Fluentd.
+- **Used by:** various observability and log analytics companies replacing Elasticsearch.
+
+---
+
+## ADD: Litestar (Alternative to FastAPI)
+
+**What you currently have:** FastAPI — excellent, widely used, but some rough edges (dependency injection is limited, no built-in DTO layer, OpenAPI generation can be slow).
+
+**Consider for new services:** **Litestar** — a FastAPI alternative by ex-Starlite team. Same ASGI foundation, but more opinionated and feature-rich.
+
+**Why it's interesting:**
+- **Msgspec** instead of Pydantic for serialization — 5-10x faster JSON encoding/decoding (uses C extensions). Optional — Pydantic also works.
+- **Built-in DTO layer** — control what fields are exposed per-endpoint without separate request/response models.
+- **Dependency injection** — proper DI container (like .NET or Spring), not just FastAPI's `Depends()` chain.
+- **Channels** — built-in WebSocket channel layer (like Django Channels). Your NATS→WebSocket relay could be simplified.
+- **Rate limiting** — built-in middleware, no external library needed.
+- **OpenAPI generation** — faster and more correct than FastAPI's.
+
+**Trade-off:** FastAPI has a much larger ecosystem and community. Litestar is better-engineered but smaller. Perfect for new companion services where you're starting fresh.
+
+---
+
+## ADD: Modal (Serverless GPU Compute)
+
+**What you currently have:** GPU compute tied to your Docker host or a provisioned GPU server.
+
+**Add for burst GPU workloads:** **Modal** — serverless GPU functions. Write Python, Modal runs it on GPUs that spin up in seconds and bill per-second.
+
+```python
+import modal
+
+app = modal.App("nexus-parser")
+
+@app.function(
+    gpu="A100",
+    image=modal.Image.debian_slim().pip_install("marker-pdf", "torch"),
+    timeout=600,
+)
+async def parse_pdf_gpu(file_bytes: bytes) -> str:
+    from marker.converters.pdf import PdfConverter
+    from marker.config.parser import ConfigParser
+    from io import BytesIO
+
+    config = ConfigParser({"output_format": "markdown"})
+    converter = PdfConverter(config=config)
+    rendered = converter(BytesIO(file_bytes))
+    return rendered.markdown
+```
+
+**Why Modal is bleeding edge:**
+- **Cold start in 1-3 seconds** — vs 5+ minutes to provision a GPU VM.
+- **Per-second billing** — parse a PDF, release the GPU. No idle GPU costs.
+- **Container snapshots** — Modal snapshots your container after model loading. Next invocation starts from the snapshot (models already in memory). Feels instant.
+- **Distributed dict** — share data between functions without external storage.
+- **Volume mounts** — persistent storage for model weights. Download once, use forever.
+- **Used by:** Ramp, Suno (AI music), Hex, many AI startups. Anthropic and OpenAI use similar internal infrastructure.
+
+**When to use:** Burst GPU workloads — large batch ingestions, OCR, fine-tuning. Keep your always-on Temporal worker for lightweight tasks and dispatch GPU-heavy work to Modal.
+
+---
+
+## ADD: Buf + ConnectRPC (Modern gRPC Alternative)
+
+**What you currently have:** REST APIs (FastAPI).
+
+**Add for service-to-service communication:** **ConnectRPC** — a simpler alternative to gRPC by the Buf team. Supports gRPC, gRPC-Web, and a simple HTTP/JSON protocol from a single Protobuf definition. Works in browsers without a proxy.
+
+```protobuf
+// proto/ingestion/v1/ingestion.proto
+syntax = "proto3";
+
+service IngestionService {
+  rpc IngestFiles(IngestRequest) returns (IngestResponse);
+  rpc GetJobStatus(GetJobRequest) returns (JobStatus);
+  rpc WatchJob(WatchJobRequest) returns (stream JobUpdate);  // server streaming
+}
+```
+
+**Why ConnectRPC is bleeding edge:**
+- **Triple protocol** — one server handles gRPC (binary, fast), gRPC-Web (browser-compatible), and Connect (simple HTTP/JSON with `curl`). You get REST-like debuggability AND gRPC performance.
+- **Buf CLI** — linting, breaking change detection, code generation. `buf generate` produces type-safe clients for Python, TypeScript, Go, Rust.
+- **Schema-first** — Protobuf is the contract between services. Add a field? `buf breaking` tells you if it's backwards-compatible.
+- **Server streaming** — `WatchJob` replaces your WebSocket for job updates. gRPC streaming is bidirectional and has built-in flow control.
+- **Used by:** Buf itself, but the gRPC ecosystem broadly is used by Google, Netflix, Uber, Cloudflare (inter-service).
+
+---
+
+## ADD: Polar Signals Parca (Continuous Profiling)
+
+**What you currently have:** No profiling infrastructure.
+
+**Add:** **Parca** — open-source continuous profiling. It tells you WHERE your CPU time and memory are going, in production, always-on, with <1% overhead.
+
+```yaml
+# docker-compose.yml
+parca:
+  image: ghcr.io/parca-dev/parca:latest
+  ports:
+    - "7070:7070"
+  volumes:
+    - ./parca.yaml:/etc/parca/parca.yaml
+```
+
+**Why this matters for your project:**
+- See exactly which line of Docling/Marker code is burning CPU during parsing
+- Find memory leaks in your long-running Temporal worker (PyTorch models not being freed)
+- Compare flame graphs before and after optimization — proof that your change actually helped
+- **eBPF-based** — no code instrumentation needed. Parca Agent attaches to your process via eBPF and samples the stack. Works with Python, Rust, Go, C++.
+- **Used by:** Polar Signals (founded by Prometheus co-founders), Frederic Branczyk (ex-Red Hat, Prometheus maintainer). Same approach Google uses internally (Google-Wide Profiling).
+
+---
+
+## Summary: Recommended Stack Upgrades
+
+Priority order for maximum impact with minimum effort:
+
+| Priority | Change | Impact | Effort |
+|----------|--------|--------|--------|
+| 1 | Drop LlamaIndex, batch embed directly | 50x fewer API calls, remove ~200 deps | Medium |
+| 2 | Enable NATS JetStream | Guaranteed delivery, message replay | Low (flag flip) |
+| 3 | Add Valkey for caching | Skip re-embedding duplicates, faster reads | Low |
+| 4 | Switch to Granian | 2-3x HTTP throughput | Low (swap import) |
+| 5 | Enable Qdrant gRPC | 2-5x faster vector ops | Low (env var) |
+| 6 | Add DuckDB for analytics | SQL analytics with zero infra | Low |
+| 7 | Swap Docling → Marker for PDFs | 2-3x faster PDF parsing | Medium |
+| 8 | Add Jina v3 or Cohere v4 embeddings | Better retrieval quality, Matryoshka dims | Medium |
+| 9 | Use Modal for burst GPU | No idle GPU costs, 1s cold start | Medium |
+| 10 | Add Quickwit for full-text + logs | Hybrid search, cheap log storage on MinIO | Medium |
+| 11 | Use Hatchet for AI workflows | Better concurrency control, rate limiting | High |
+| 12 | Add ConnectRPC for inter-service | Type-safe, streaming, browser-compatible | High |
+| 13 | Replace ScyllaDB driver with Rust driver | Shard-aware routing, native async | High |
+| 14 | Add Parca continuous profiling | Find real bottlenecks, not guessed ones | Low |
