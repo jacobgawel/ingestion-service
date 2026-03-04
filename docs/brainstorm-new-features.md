@@ -1085,3 +1085,561 @@ Cluster(
 ```
 
 **Impact:** Eliminates coordinator hops. Especially impactful as you scale beyond a single ScyllaDB node.
+
+---
+---
+
+# Big Tech Infrastructure & Patterns Worth Learning
+
+Tech and patterns used at NVIDIA, Anthropic, Google, Meta, Apple, Netflix, Uber, Cloudflare, and others. Each maps to something you can apply to this project or build as a new service.
+
+---
+
+## 65. NVIDIA Triton Inference Server (Multi-Model GPU Serving)
+
+**Used by:** NVIDIA, AWS (SageMaker), Azure, most ML platform teams
+
+**What:** Triton is NVIDIA's production inference server. It serves multiple models (PyTorch, TensorFlow, ONNX, TensorRT, vLLM) on shared GPUs with dynamic batching, model ensembles, and automatic GPU memory management.
+
+**How it applies to your project:** Instead of loading Docling + embedding models + vision models in separate Python processes each claiming a full GPU, Triton multiplexes them on shared GPU memory. It dynamically batches requests — if 20 embedding requests arrive within 5ms, Triton fuses them into a single GPU kernel call.
+
+**What you'd learn:**
+- Model repository patterns (versioned model configs)
+- Dynamic batching and request scheduling on GPU
+- TensorRT optimization (quantize models for 3-5x inference speedup)
+- gRPC + shared-memory transport between client and server (zero-copy inference)
+- Ensemble pipelines (chain OCR → NER → embedding in a single Triton request)
+
+**Language to write clients in:** Python (tritonclient), C++ for custom backends
+**Infrastructure:** Docker with NVIDIA Container Toolkit, or Kubernetes with NVIDIA GPU Operator
+
+---
+
+## 66. Anthropic-Style Prompt Caching & Context Management
+
+**Used by:** Anthropic (Claude API)
+
+**What:** Anthropic's prompt caching lets you cache long system prompts and reuse them across requests, paying only for the incremental tokens. This pattern generalizes: any RAG system can separate "static context" from "dynamic query" and cache the static part.
+
+**How it applies:** When your Query Service does RAG, the retrieved documents form a context window. If multiple users query the same corpus (same project), the document context is identical — only the user question changes. Cache the document context prefix and reuse it.
+
+**What you'd learn:**
+- KV-cache management for transformer inference
+- Prefix-sharing across requests (vLLM's automatic prefix caching does this)
+- Cost optimization — Anthropic charges 90% less for cached tokens. At scale, this is the single biggest cost lever for RAG.
+- Designing retrieval to maximize cache hits (sort retrieved chunks deterministically so the same documents produce the same token prefix)
+
+---
+
+## 67. Google Colossus / Apple FoundationDB (Distributed Storage Layers)
+
+**Used by:** Google (Colossus underpins BigTable, Spanner, GFS), Apple (FoundationDB underpins iCloud, CloudKit)
+
+**What:** Both are distributed storage layers that provide strong consistency guarantees and are used as the foundation for higher-level databases. FoundationDB is open source; Colossus is not.
+
+**How it applies:** FoundationDB's "layer" concept is worth studying. It's a minimal ordered key-value store, and everything else (document DB, graph DB, spatial index) is built as a layer on top. Tigris (idea #54) is a FoundationDB layer. You could build your own:
+
+**What you'd learn:**
+- **FoundationDB** — ACID transactions across a distributed cluster with serializable isolation. The testing methodology (deterministic simulation testing) is legendary — they simulate network partitions, disk failures, and clock skew to find bugs before production.
+- **Layer concept** — build a purpose-built storage layer for your exact access patterns. Instead of adapting your queries to ScyllaDB's data model, build a layer that matches your domain model exactly.
+- **Deterministic simulation testing** — Antithesis (founded by FoundationDB creators) sells this as a product. Write your service, Antithesis finds bugs by simulating every possible failure mode. Restate (idea #51) also uses this approach.
+
+**Language:** FoundationDB itself is C++. Client bindings in Python, Go, Rust, Java.
+
+---
+
+## 68. Meta FAISS + Product Quantization (Billion-Scale Vector Search)
+
+**Used by:** Meta (Facebook AI), Spotify, Pinterest, Instacart
+
+**What:** FAISS (Facebook AI Similarity Search) is Meta's library for billion-scale nearest neighbor search. It's not a database — it's a library that runs in-process. Combined with Product Quantization (PQ), it compresses 1536-dim float32 vectors down to ~64 bytes while maintaining >95% recall.
+
+**How it applies:** If Qdrant becomes a bottleneck at scale, or if you want sub-millisecond search for a hot path, FAISS running in-process eliminates network round-trips entirely.
+
+**What you'd learn:**
+- **IVF (Inverted File Index)** — partition the vector space into Voronoi cells, only search nearby cells. 10-100x faster than brute force.
+- **Product Quantization** — compress vectors from 6KB to 64 bytes. Fit 1 billion vectors in ~64GB RAM.
+- **GPU FAISS** — run search on GPU for another 10-50x speedup. NVIDIA builds custom CUDA kernels for this.
+- **Hybrid search architecture** — use FAISS for hot data (recent 30 days) and Qdrant for the full corpus. Two-tier like Google's search index.
+
+**Language:** C++ core with Python bindings. GPU variant needs CUDA.
+
+---
+
+## 69. Netflix Zuul / Envoy Proxy (Service Mesh & Intelligent Routing)
+
+**Used by:** Netflix (Zuul), Google/Lyft (Envoy), Uber, every large microservices org
+
+**What:** Envoy is an L7 proxy written in C++ that handles service-to-service communication. It provides load balancing, circuit breaking, rate limiting, observability, and mTLS — all without modifying application code.
+
+**How it applies:** As you add more services (query, embedding, notification, processing), you need service-to-service communication that handles failures gracefully. Envoy as a sidecar proxy gives you:
+- **Circuit breaking** — if the embedding service is overloaded, Envoy stops sending requests instead of cascading the failure to ingestion.
+- **Automatic retries** with jitter (replaces manual retry logic)
+- **Distributed tracing** — Envoy injects trace headers so you can see a request flow from Gateway → Ingestion → Processing → Embedding → Qdrant.
+- **gRPC load balancing** — HTTP/2-aware, unlike standard L4 load balancers that pin all streams to one connection.
+
+**Alternative:** Linkerd (Rust-based, simpler than Envoy/Istio). Or skip the mesh and use NATS for service communication (request-reply pattern).
+
+**Infrastructure:** Kubernetes with Istio (Envoy-based) or Linkerd. Or standalone Envoy in Docker Compose.
+
+---
+
+## 70. Uber Cadence → Temporal Patterns (Advanced Workflow Techniques)
+
+**Used by:** Uber (Cadence, Temporal's predecessor), Stripe, Netflix, Snap, Datadog
+
+**What:** Since you already use Temporal, here are advanced patterns that big companies use:
+
+- **Saga pattern** — long-running transactions across services. If embedding fails after parsing succeeded, run compensating actions (delete parsed data, update status, notify user). Uber uses this for ride booking (reserve driver → charge payment → if charge fails, release driver).
+- **Continue-as-new** — for workflows processing unbounded data (streaming ingestion, continuous crawling). Instead of one workflow growing forever, snapshot state and start a new execution. Prevents history size from exploding.
+- **Child workflows** — your current monolithic workflow could spawn child workflows per file. If one file hangs, it doesn't block others. Each child has independent retry/timeout policies.
+- **Schedules** — built-in cron. Trigger re-indexing, cleanup, or evaluation runs on a schedule without an external cron system.
+- **Update/Signal handlers** — let external systems inject data into a running workflow. A user cancels a job? Signal the workflow. Priority change? Update the workflow in-flight.
+
+---
+
+## 71. Cloudflare Workers + R2 + D1 (Edge-Native Architecture)
+
+**Used by:** Cloudflare, Vercel, Shopify, Discord
+
+**What:** Run compute at the edge (200+ global PoPs). Workers run V8 isolates that cold-start in <5ms. R2 is S3-compatible storage with zero egress fees. D1 is SQLite at the edge.
+
+**How it applies:** Build the Gateway (idea #60) and Query Service (idea #59) on Cloudflare:
+- **Workers** — handle auth, rate limiting, and request routing at the edge. Requests that fail auth never reach your origin servers.
+- **R2** — replace MinIO for file storage. Zero egress fees means serving files to users costs nothing. S3-compatible API so your boto3 code works unchanged.
+- **Vectorize** — Cloudflare's edge vector database. Store a lightweight index at the edge for low-latency similarity search, backed by Qdrant for the full corpus.
+- **D1** — SQLite at the edge for user preferences, API keys, rate limit counters.
+- **Queues** — Cloudflare Queues for async work dispatch from edge to origin.
+
+**What you'd learn:** Edge computing patterns, V8 isolate model, globally distributed state. This is where the industry is heading — compute moves to the user, not the other way around.
+
+**Language:** TypeScript/JavaScript (Workers), Python (limited support via Pyodide)
+
+---
+
+## 72. Google Spanner-Style Global Consistency (TrueTime)
+
+**Used by:** Google (Spanner), CockroachDB (approximation)
+
+**What:** Google Spanner achieves globally consistent reads using GPS-synced atomic clocks (TrueTime). CockroachDB approximates this with NTP + hybrid logical clocks. The insight: if you know the uncertainty bound on your clock, you can wait out the uncertainty window and guarantee consistency.
+
+**How it applies:** If your system goes multi-region (idea #20), you face the question: "user uploads in US-East, queries in EU-West — does the query see the upload?" With ScyllaDB's eventual consistency, maybe not. With Spanner/CockroachDB, yes — always.
+
+**What you'd learn:**
+- **Hybrid logical clocks** — how CockroachDB guarantees consistency without atomic clocks
+- **Linearizability vs serializability** — the two strongest consistency models and when you need each
+- **Multi-region replication topologies** — active-active vs active-passive vs consensus-based
+
+**Infrastructure:** CockroachDB multi-region cluster or Google Cloud Spanner (managed)
+
+---
+
+## 73. Meta PyTorch + CUDA Custom Kernels (GPU Programming)
+
+**Used by:** NVIDIA, Meta, OpenAI, Anthropic, every AI lab
+
+**What:** Write custom CUDA kernels for operations that PyTorch doesn't optimize well. Or use Triton (the language, not the server — confusingly same name) to write GPU kernels in Python.
+
+**How it applies:** Your embedding pipeline's bottleneck will eventually be GPU throughput. Custom kernels for:
+- **Fused attention** — FlashAttention (by Tri Dao, used by everyone) fuses the attention computation into a single kernel, 2-4x faster than naive PyTorch.
+- **Quantized inference** — run embedding models in INT8 or INT4 with custom kernels. NVIDIA's TensorRT and Meta's FBGEMM do this.
+- **Batch preprocessing** — tokenize + pad + embed in a single GPU pipeline instead of CPU tokenize → GPU embed.
+
+**What you'd learn:**
+- **OpenAI Triton** (the language) — write GPU kernels in Python. Much easier than raw CUDA. This is what Anthropic and OpenAI use for custom training kernels.
+- **CUDA programming model** — threads, blocks, warps, shared memory, memory coalescing
+- **Model optimization pipeline** — PyTorch → ONNX → TensorRT for production inference
+
+**Language:** Python (Triton language), CUDA C++ for raw kernels
+
+---
+
+## 74. Netflix Data Mesh + Apache Iceberg (Lakehouse Architecture)
+
+**Used by:** Netflix, Apple, Airbnb, Uber, LinkedIn
+
+**What:** Apache Iceberg is a table format for huge datasets (petabyte-scale) that supports ACID transactions, time travel, schema evolution, and partition pruning. It sits on top of object storage (S3/MinIO/R2) and is queried by engines like Spark, Trino, DuckDB, or ClickHouse.
+
+**How it applies:** As your document corpus grows, you'll need an analytical layer:
+- Store all ingested document metadata, embeddings, and processing metrics in Iceberg tables on MinIO
+- Query with DuckDB locally or Trino in production
+- Time travel: "show me the corpus as it existed on January 15th" — useful for debugging retrieval regressions
+- Schema evolution: add columns to metadata tables without rewriting data
+
+**What you'd learn:**
+- **Lakehouse architecture** — combine the flexibility of a data lake with the reliability of a data warehouse
+- **Parquet + Iceberg** — columnar storage with metadata layers
+- **Apache Spark** — distributed compute for batch processing millions of documents
+- **Data mesh** — organizational pattern where each team owns their data as a product. Your ingestion service publishes Iceberg tables that other teams consume.
+
+**Infrastructure:** MinIO (you already have it) + Iceberg + DuckDB (dev) / Trino (prod) / Spark (batch)
+
+---
+
+## 75. Anthropic Constitutional AI Patterns (Self-Improving Pipelines)
+
+**Used by:** Anthropic, OpenAI, Google DeepMind
+
+**What:** Constitutional AI uses an LLM to evaluate and improve its own outputs against a set of principles. Apply this pattern to your ingestion pipeline — use an LLM to evaluate and improve the quality of parsed/chunked content.
+
+**How it applies:**
+- **Chunk quality evaluation** — after chunking, run a fast model (Claude Haiku / GPT-4o-mini) to score each chunk: "Does this chunk contain a coherent, self-contained idea? Score 1-5." Discard or re-chunk low-scoring chunks.
+- **Parsing quality checks** — compare Docling's Markdown output against the original PDF. "Does the Markdown preserve all information from page 3? List anything missing." Automatically re-parse pages that fail.
+- **Embedding quality validation** — embed a chunk, then use the embedding to retrieve the original chunk. If it doesn't come back in top-3, the embedding or chunk has quality issues.
+- **Continuous improvement loop** — log quality scores, identify failure patterns, fine-tune parsing/chunking strategies automatically.
+
+**What you'd learn:** LLM-as-judge patterns, RLHF/RLAIF concepts, self-improving system design
+
+---
+
+## 76. Google Borg / Kubernetes Operators (Custom Infrastructure Automation)
+
+**Used by:** Google (Borg → Kubernetes), every cloud-native company
+
+**What:** Write a Kubernetes Operator that automates your entire platform's lifecycle — deploying services, scaling based on queue depth, provisioning Qdrant collections, managing database migrations.
+
+**How it applies:** Instead of manually `docker compose up`, build an operator that:
+- Watches a `NexusProject` CRD (Custom Resource Definition) — when a user creates one, the operator provisions a Qdrant collection, ScyllaDB keyspace, MinIO bucket, and NATS subjects
+- Auto-scales Temporal workers based on queue depth (KEDA + Temporal metrics)
+- Runs canary deployments — deploy new embedding model to 10% of traffic, compare quality metrics, auto-promote or rollback
+- Manages GPU node pools — scale GPU nodes to zero when no processing jobs are queued
+
+**What you'd learn:**
+- **Kubernetes Operator pattern** — the same pattern Google uses internally to manage all their infrastructure
+- **Custom Resource Definitions** — extend Kubernetes with your own API objects
+- **Reconciliation loops** — the core of Kubernetes: continuously observe actual state, compare to desired state, take action
+- **KEDA** — event-driven autoscaling based on NATS queue depth, Temporal task count, etc.
+
+**Language:** Go (kubebuilder/operator-sdk) or Python (kopf)
+**Infrastructure:** Kubernetes (k3s for dev, EKS/GKE for prod), KEDA, Prometheus
+
+---
+
+## 77. Uber H3 + PostGIS (Geospatial Indexing for Documents)
+
+**Used by:** Uber, Foursquare, Snap, Google Maps
+
+**What:** H3 is Uber's hexagonal hierarchical geospatial indexing system. PostGIS extends PostgreSQL with spatial operations.
+
+**How it applies:** If your corpus includes location-aware documents (real estate listings, city permits, restaurant menus, travel guides), add geospatial search:
+- Tag documents with lat/lng during ingestion
+- "Find similar documents within 5km of this location" — combine H3 spatial filtering with Qdrant vector similarity
+- Spatial clustering — group documents by geographic region for better retrieval
+
+**Language:** Python (h3-py), SQL (PostGIS)
+**Infrastructure:** PostgreSQL + PostGIS (or CockroachDB which has spatial support built in)
+
+---
+
+## 78. Meta LLaMA + LoRA Fine-Tuning (Custom Embedding Models)
+
+**Used by:** Meta, Anthropic, Google, every AI team doing domain-specific tasks
+
+**What:** Fine-tune open-source embedding models on your specific domain data using LoRA (Low-Rank Adaptation) — a technique that trains only ~1% of model parameters, making fine-tuning feasible on a single GPU.
+
+**How it applies:**
+- Fine-tune `mxbai-embed-large-v1` or `bge-large-en-v1.5` on your domain's vocabulary
+- Generate training pairs from your corpus: (query, positive_chunk, negative_chunk)
+- A fine-tuned model can improve retrieval quality by 10-30% on domain-specific queries
+- Serve the fine-tuned model via HuggingFace TEI or Triton
+
+**What you'd learn:**
+- **LoRA / QLoRA** — parameter-efficient fine-tuning. Train on a single A100 or even a 3090.
+- **Contrastive learning** — the training objective for embedding models (pull similar pairs together, push dissimilar pairs apart)
+- **Matryoshka embeddings** — train models that produce useful embeddings at any dimension (256, 512, 1024, 1536). Use short embeddings for fast filtering, full-length for re-ranking.
+- **Evaluation** — MTEB benchmark, BEIR datasets, custom test suites
+
+**Language:** Python (transformers, sentence-transformers, peft)
+**Infrastructure:** Single GPU (24GB+ VRAM), Weights & Biases for experiment tracking
+
+---
+
+## 79. Apple Private Cloud Compute Pattern (Confidential Computing)
+
+**Used by:** Apple, Microsoft (Azure Confidential Computing), Google (Confidential VMs)
+
+**What:** Process sensitive data in hardware-isolated enclaves where even the cloud provider cannot see the data. Apple's Private Cloud Compute uses this for on-device AI that needs server-side processing.
+
+**How it applies:** If you ingest sensitive documents (medical records, legal contracts, financial data):
+- Run parsing and embedding inside a TEE (Trusted Execution Environment) — AMD SEV-SNP or Intel TDX
+- The encryption keys never leave the hardware enclave
+- Remote attestation proves to clients that their data is processed in a secure environment
+- Even if the host is compromised, enclave data is protected
+
+**What you'd learn:**
+- **TEE architecture** — how hardware enclaves work (AMD SEV, Intel SGX/TDX, ARM CCA)
+- **Remote attestation** — cryptographic proof that code is running in a genuine enclave
+- **Confidential containers** — run Docker containers inside enclaves (Kata Containers, Azure Confidential Containers)
+- **Threat modeling** — what confidential computing protects against vs what it doesn't
+
+**Infrastructure:** AMD EPYC servers (SEV-SNP), Azure Confidential VMs, or GCP Confidential Computing
+
+---
+
+## 80. Stripe-Style Idempotency Keys (Exactly-Once Ingestion)
+
+**Used by:** Stripe, AWS, Google Cloud APIs
+
+**What:** Every API call includes an idempotency key. If the same key is seen twice, the server returns the cached result instead of re-processing. Stripe pioneered this pattern for payment APIs.
+
+**How it applies:** Your ingestion endpoint should be idempotent:
+- Client sends `Idempotency-Key: abc123` header with the upload
+- Server checks Valkey/Redis for that key. If found, return the existing job.
+- If not found, process the upload and cache the result with the key.
+- This prevents duplicate ingestion when clients retry on timeout.
+
+**What you'd learn:**
+- Distributed idempotency with key expiry
+- The CAP implications — what happens if the idempotency cache is unavailable?
+- Stripe's approach: store idempotency records in the same transaction as the business operation (no cache — database-backed)
+
+---
+
+## 81. Netflix Chaos Engineering (Resilience Testing)
+
+**Used by:** Netflix (Chaos Monkey), AWS (Fault Injection Service), Gremlin
+
+**What:** Intentionally inject failures into production systems to find weaknesses before they cause outages.
+
+**How it applies:**
+- **Kill a Temporal worker** mid-activity — does the workflow recover and retry on another worker?
+- **Partition Qdrant** — what happens when the vector DB is unreachable during embedding? Does the workflow retry or corrupt state?
+- **Slow down MinIO** — inject 5-second latency on `put_object`. Does the ingestion timeout cascade to WebSocket clients?
+- **Fill ScyllaDB disk** — does the schema creation handle write failures gracefully?
+
+**What you'd learn:**
+- **Steady-state hypothesis** — define "normal" (e.g., "jobs complete within 60s with <1% failure rate"), then inject faults and verify the hypothesis still holds
+- **Blast radius control** — start with one request, not all traffic
+- **Game days** — scheduled chaos exercises where the team practices incident response
+
+**Tools:** Chaos Mesh (Kubernetes-native), Litmus (CNCF), or just `tc` and `iptables` for network faults
+**Language:** Go (Chaos Mesh controllers) or Python (custom fault injection scripts)
+
+---
+
+## 82. Cloudflare Durable Objects (Stateful Edge Compute)
+
+**Used by:** Cloudflare, Discord (message storage), Canva
+
+**What:** Durable Objects are single-threaded, stateful JavaScript objects that live at the edge. Each object has a unique ID, persistent storage, and guaranteed single-execution (no concurrency issues). Think of them as lightweight actors.
+
+**How it applies:**
+- **Job coordination** — each ingestion job is a Durable Object. It tracks file status, handles WebSocket connections, and coordinates between parse/embed/finalize stages. No need for ScyllaDB for job state or NATS for pubsub — the Durable Object IS the coordination layer.
+- **Rate limiting** — per-user Durable Objects that track request counts with zero-latency reads (state is co-located with compute).
+- **Real-time collaboration** — if multiple users watch the same job's progress, they connect to the same Durable Object which broadcasts updates.
+
+**What you'd learn:**
+- **Actor model** — single-threaded, message-passing concurrency (same model as Erlang/Elixir, which powers WhatsApp and Discord)
+- **Edge-native state management** — state lives where the user is, not in a central datacenter
+- **Conflict-free coordination** — single-writer pattern eliminates race conditions without locks
+
+**Language:** TypeScript
+**Infrastructure:** Cloudflare Workers platform
+
+---
+---
+
+# Expanded Companion Services with Full Stack Recommendations
+
+Detailed service blueprints with language choices, infrastructure, and reasoning for each.
+
+---
+
+## 83. Nexus Auth Service
+
+**What it does:** Centralized authentication and authorization. JWT issuance, API key management, OAuth2/OIDC, RBAC, and row-level access control for multi-tenant document isolation.
+
+**Recommended language:** **Go**
+- Auth services are latency-critical (every request passes through them) and Go compiles to a single binary with sub-millisecond response times
+- Excellent JWT/crypto libraries (golang-jwt)
+- Built-in HTTP server is production-ready (no framework needed)
+
+**Infrastructure:**
+- **Database:** PostgreSQL (ACID for user/role data, not eventually consistent)
+- **Session/token cache:** Valkey (formerly Redis) — store revoked tokens, rate limit counters, session data
+- **OIDC provider:** Use Ory Hydra (open source, Go-based) or Zitadel if you want a full identity platform
+- **Secret management:** HashiCorp Vault or SOPS for API key encryption at rest
+- **Deploy:** Single Docker container, <50MB image, <10MB RAM
+
+---
+
+## 84. Nexus Search & Retrieval Service (Production RAG)
+
+**What it does:** The read path — semantic search, hybrid search, re-ranking, RAG generation with streaming, conversation memory, and citation tracking.
+
+**Recommended language:** **Rust (Axum framework)**
+- P99 latency matters for search — users wait for every millisecond
+- Axum is async-native, compiles to a single binary, uses ~5MB RAM idle
+- Rust's ownership model prevents the memory leaks that plague long-running Python services
+- If Rust is too steep: **Go (Fiber/Echo)** for similar performance with easier onboarding
+
+**Infrastructure:**
+- **Vector DB:** Qdrant (gRPC, shared cluster with ingestion)
+- **Re-ranking:** Cohere Rerank API, or self-hosted cross-encoder via Triton
+- **LLM:** Anthropic Claude / OpenAI via API. For self-hosted: vLLM on GPU nodes
+- **Conversation memory:** Valkey with TTL (ephemeral) + ScyllaDB (persistent history)
+- **Caching:** Two-tier — Valkey for exact query cache, Qdrant for semantic similarity cache (idea #13)
+- **Streaming:** Server-Sent Events (SSE) for token streaming to clients
+- **Deploy:** Kubernetes with HPA scaling on request latency P95
+
+---
+
+## 85. Nexus Real-Time Streaming Pipeline
+
+**What it does:** Continuous ingestion from streaming sources — Kafka topics, webhook events, database CDC (Change Data Capture), RSS/Atom feeds, file system watchers.
+
+**Recommended language:** **Rust or Go**
+- Streaming pipelines need consistent low-latency processing with minimal GC pauses
+- Rust: use `rdkafka` crate (librdkafka wrapper) for Kafka, `tokio` for async I/O
+- Go: use `confluent-kafka-go` or Sarama, goroutines for concurrent stream processing
+
+**Infrastructure:**
+- **Message broker:** Apache Kafka or Redpanda (Kafka-compatible, written in C++, no JVM, 10x lower latency). Redpanda is the bleeding-edge choice.
+- **CDC:** Debezium for capturing database changes as events
+- **Stream processing:** Use native consumers (avoid Spark Streaming / Flink unless you're at massive scale). For complex event processing, consider Arroyo (Rust-based stream processor with SQL).
+- **Schema registry:** Confluent Schema Registry or Buf (for Protobuf schemas)
+- **Deploy:** Redpanda cluster (3 nodes minimum) + consumer containers
+
+**Why Redpanda over Kafka:**
+- Single C++ binary, no JVM, no ZooKeeper
+- 10x lower tail latency
+- S3-compatible tiered storage built in
+- Kafka API compatible — your Kafka libraries work unchanged
+
+---
+
+## 86. Nexus Observability Stack
+
+**What it does:** Unified logging, metrics, tracing, and alerting across all services. Not a service you write, but an infrastructure stack you deploy.
+
+**Recommended stack (all open source):**
+
+| Layer | Tool | Why |
+|-------|------|-----|
+| **Metrics** | VictoriaMetrics | Prometheus-compatible, 10x less RAM, long-term storage. Drop-in replacement. |
+| **Logs** | Grafana Loki | Log aggregation designed for Kubernetes. Index-free — stores compressed log streams, queries by label. 10-100x cheaper than Elasticsearch. |
+| **Traces** | Grafana Tempo | Distributed tracing backend. Stores traces in object storage (MinIO!). Integrates with OpenTelemetry. |
+| **Visualization** | Grafana | Dashboards for all three signal types in one UI. |
+| **Alerting** | Grafana Alerting | Alert on metrics, logs, or trace-derived SLOs. Routes to Slack/PagerDuty/email. |
+| **Instrumentation** | OpenTelemetry | Vendor-neutral SDK. One instrumentation → export to any backend. |
+
+**Language for instrumentation:** Python (opentelemetry-python), auto-instrumented for FastAPI, httpx, and Temporal
+**Infrastructure:** Docker Compose for dev, Kubernetes with Helm charts for prod. All components store data in MinIO (object storage you already run).
+
+**What you'd learn:** OpenTelemetry is becoming the universal standard. Every big company (Google, Microsoft, AWS, Uber, Stripe) is converging on it. Learning OTel now means you understand observability everywhere.
+
+---
+
+## 87. Nexus Admin Dashboard
+
+**What it does:** Web UI for monitoring ingestion jobs, browsing the document corpus, testing search queries, managing projects/users, and viewing system health.
+
+**Recommended language:** **TypeScript (Next.js or SvelteKit)**
+- Next.js: React-based, biggest ecosystem, great for data-heavy dashboards. Used by Netflix, Twitch, Notion.
+- SvelteKit: Simpler, faster, less boilerplate. Better developer experience. Used by Apple (some internal tools), Vercel.
+
+**Infrastructure:**
+- **Backend:** The dashboard calls your existing services via REST/gRPC. No new backend needed.
+- **Auth:** Clerk or Auth0 for managed auth, or your Nexus Auth Service (idea #83)
+- **Real-time:** Connect to the existing NATS WebSocket for live job updates
+- **Charts:** Recharts (React) or LayerChart (Svelte) for ingestion metrics visualization
+- **Hosting:** Vercel (zero-config Next.js), Cloudflare Pages (SvelteKit), or self-hosted in Docker
+- **State management:** TanStack Query (React) or SvelteKit's built-in load functions for server-state
+
+**What you'd learn:** Modern full-stack TypeScript, SSR/streaming, edge rendering, real-time WebSocket UIs
+
+---
+
+## 88. Nexus CLI Tool
+
+**What it does:** A command-line tool for developers to interact with the platform — upload files, check job status, query the knowledge base, manage projects, and configure settings.
+
+**Recommended language:** **Rust (clap crate) or Go (cobra)**
+- Both compile to a single static binary — `curl | install` just works, no runtime needed
+- Rust with `clap`: beautiful auto-generated help, shell completions, typed arguments
+- Go with `cobra`: same pattern, used by kubectl, gh (GitHub CLI), docker CLI
+
+```
+nexus upload ./docs/ --project my-project --source cli
+nexus jobs list --project my-project --status processing
+nexus search "how does authentication work" --project my-project --top-k 5
+nexus status abc-123-def
+```
+
+**Infrastructure:**
+- **Distribution:** GitHub Releases with cross-compiled binaries (linux/mac/windows). Use GoReleaser (Go) or cargo-dist (Rust) for automated releases.
+- **Auth:** Store API key in `~/.nexus/config.toml`
+- **Output:** JSON (for piping to jq) and human-readable table format (default)
+
+---
+
+## 89. Nexus Data Sync Service (Connectors)
+
+**What it does:** Pull documents from external sources — Google Drive, Notion, Confluence, SharePoint, Slack, GitHub repos, S3 buckets — and continuously sync them into the ingestion pipeline.
+
+**Recommended language:** **Python (FastAPI or plain async)**
+- Connector logic is I/O-bound (API calls to external services), Python's async is perfect
+- Most third-party SDKs are Python-first (google-api-python-client, notion-client, atlassian-python-api)
+- Low compute, high I/O — Python's speed doesn't matter here
+
+**Infrastructure:**
+- **Orchestration:** Temporal (reuse existing). Each connector is a workflow with a schedule (e.g., sync Google Drive every 15 minutes).
+- **OAuth token storage:** HashiCorp Vault or encrypted PostgreSQL column
+- **Change detection:** Store file hashes/ETags in ScyllaDB. Only re-ingest changed files.
+- **Queue:** NATS JetStream for dispatching sync events to the ingestion service
+- **Rate limiting:** Respect external API rate limits with Temporal's activity heartbeats + sleep
+
+**What you'd learn:** OAuth2 flows, webhook receivers, incremental sync patterns, backpressure handling
+
+---
+
+## 90. Nexus Model Registry & A/B Testing Service
+
+**What it does:** Manage multiple embedding models, chunking strategies, and retrieval configurations. Run A/B tests to compare them in production.
+
+**Recommended language:** **Go**
+- Routing decisions (which model serves this request) must be fast and consistent
+- Go's simplicity makes the routing logic easy to audit
+- Excellent concurrency for handling traffic splitting
+
+**Infrastructure:**
+- **Config store:** etcd (the same thing Kubernetes uses for configuration) — strongly consistent, watchable key-value store
+- **Traffic splitting:** Envoy proxy with weighted routes, or application-level routing in the Gateway
+- **Metrics:** OpenTelemetry metrics tagged by experiment variant → VictoriaMetrics → Grafana
+- **Statistical analysis:** Python notebook (Jupyter) or automated with scipy for significance testing
+- **Model storage:** MinIO for model artifacts (LoRA adapters, ONNX files)
+
+---
+
+## Language Recommendation Summary
+
+| Service | Language | Reason |
+|---------|----------|--------|
+| Ingestion (current) | Python | Correct choice — ML libraries, Docling, LlamaIndex all Python-first |
+| Auth | Go | Latency-critical, single binary, great crypto libs |
+| Search / RAG | Rust (Axum) | P99 latency matters, memory safety for long-running processes |
+| Streaming Pipeline | Rust or Go | Consistent latency, no GC pauses, high throughput |
+| Data Sync / Connectors | Python | I/O-bound, best third-party SDK support |
+| Admin Dashboard | TypeScript (Next.js/SvelteKit) | Full-stack web, real-time UIs, SSR |
+| CLI Tool | Rust or Go | Single binary distribution, shell completions |
+| Model Registry / A/B | Go | Simple routing logic, fast, auditable |
+| GPU Processing | Python + Rust (PyO3) | Python for ML frameworks, Rust for CPU-hot paths |
+| Gateway | Go (or Hono/TypeScript for edge) | High-throughput proxy, minimal overhead |
+
+---
+
+## Infrastructure Platform Recommendation
+
+If you're building the full Nexus platform, here's the infrastructure stack:
+
+| Layer | Tool | Why |
+|-------|------|-----|
+| **Container orchestration** | Kubernetes (k3s for dev) | Industry standard, required for GPU scheduling |
+| **GPU scheduling** | NVIDIA GPU Operator + MIG | Multi-instance GPU — one A100 serves 7 isolated workloads |
+| **Service mesh** | Linkerd (simpler) or Istio (more features) | mTLS, circuit breaking, traffic splitting |
+| **Autoscaling** | KEDA | Scale on NATS queue depth, Temporal task count, custom metrics |
+| **CI/CD** | GitHub Actions + ArgoCD | GitOps — push to git, ArgoCD syncs to cluster |
+| **Secret management** | HashiCorp Vault | Dynamic secrets, auto-rotation, PKI |
+| **DNS/TLS** | Cloudflare (proxy) + cert-manager | Automatic HTTPS, DDoS protection |
+| **Object storage** | MinIO (self-hosted) or R2 (cloud) | You already run MinIO |
+| **Package registry** | GitHub Container Registry (ghcr.io) | Free for public, integrated with GitHub Actions |
