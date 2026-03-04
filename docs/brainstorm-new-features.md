@@ -699,3 +699,389 @@ Store chunks from different strategies in separate Qdrant collections. Run the s
 **What:** Track which documents reference or depend on other documents. When a source document is re-ingested or deleted, identify all downstream documents that may be affected.
 
 **Why this is interesting:** In regulated environments (healthcare, finance, legal), you need to know: "if this policy document changes, which other documents cite it?" Temporal workflows can trigger cascading re-ingestion when a dependency changes. Store lineage as edges in ScyllaDB or the knowledge graph from idea #6.
+
+---
+---
+
+# Bleeding-Edge Tech Stack Alternatives
+
+Replacements or upgrades for current stack components. Each section explains what it replaces, why you'd switch, and what you'd learn.
+
+---
+
+## 51. Restate instead of Temporal (Durable Execution)
+
+**Replaces:** Temporal
+
+**What:** Restate is a newer durable execution engine (open source, written in Rust) that embeds directly into your application as a library instead of requiring a separate server cluster. You write regular async Python functions with Restate's SDK and it handles retries, state, and exactly-once execution.
+
+**Why it's interesting to learn:**
+- **No separate infrastructure** — Restate runs as a single binary sidecar or embedded server, vs Temporal requiring a full server + database (Postgres/Cassandra) + UI. Massively simpler ops.
+- **RPC-native** — services call each other like normal function calls; Restate intercepts and makes them durable. No task queues, no workflow vs activity distinction.
+- **Virtual objects** — built-in keyed state that survives restarts. The ingestion job state could live in Restate itself instead of ScyllaDB.
+- **Written in Rust** — single binary, tiny footprint, sub-millisecond overhead.
+
+**Trade-off:** Temporal has a much larger ecosystem, better docs, and battle-tested scale. Restate is newer but architecturally cleaner for many use cases.
+
+```python
+# What your ingestion workflow could look like with Restate
+from restate import Service, Context
+
+ingestion = Service("ingestion")
+
+@ingestion.handler()
+async def ingest(ctx: Context, request: IngestionRequest):
+    files = await ctx.run("parse", parse_files, request)
+    await ctx.run("embed", embed_markdown, files)
+    await ctx.run("finalize", finalize_job, request.job_id)
+```
+
+---
+
+## 52. Meilisearch or Typesense instead of Qdrant (Hybrid Search)
+
+**Replaces:** Qdrant (partially — for hybrid keyword + vector search)
+
+**What:** Meilisearch and Typesense are search engines primarily built for typo-tolerant full-text search, but both have added vector search capabilities. They combine keyword and semantic search in a single engine.
+
+**Why it's interesting:**
+- **Hybrid search in one engine** — no need to run Qdrant for vectors AND Elasticsearch for keywords. One service does both.
+- **Meilisearch** — Rust-based, sub-50ms search, built-in faceting, typo tolerance, and now hybrid vector search with auto-embedding. Dead simple to operate (single binary, zero config).
+- **Typesense** — C++-based, supports vector search with HNSW, embedded ML model inference, built-in geosearch. More feature-rich for structured data.
+- **When to use:** If your retrieval strategy needs exact keyword matching (product names, error codes, IDs) alongside semantic search, a hybrid engine gives you both without query-time orchestration.
+
+**Trade-off:** Neither matches Qdrant's vector-specific optimizations (quantization, multi-vector, sparse vectors, GPU indexing). Best when keyword search is equally important as semantic search.
+
+---
+
+## 53. SurrealDB instead of ScyllaDB (Multi-Model Database)
+
+**Replaces:** ScyllaDB (and potentially the knowledge graph DB from idea #6)
+
+**What:** SurrealDB is a multi-model database that supports document, graph, key-value, and relational query patterns in a single engine with a SQL-like query language (SurrealQL).
+
+**Why it's interesting:**
+- **Graph + document in one** — the ingestion jobs table AND the knowledge graph (idea #6) live in the same DB. Query document metadata and traverse entity relationships without a second database.
+- **Record links** — first-class relationships between records. `ingestion_files` can link directly to `ingestion_jobs` without JOIN-like queries.
+- **Real-time LIVE queries** — subscribe to changes on any table. Could replace NATS for job status updates — `LIVE SELECT * FROM ingestion_jobs WHERE job_id = $id` pushes changes to connected clients.
+- **Built-in auth** — row-level security with `PERMISSIONS` clauses. Multi-tenancy enforcement at the DB layer.
+
+**Trade-off:** ScyllaDB is purpose-built for high-throughput, low-latency writes at massive scale. SurrealDB is more versatile but hasn't been battle-tested at the same scale. Good for projects that value flexibility over raw throughput.
+
+---
+
+## 54. Tigris instead of MinIO (S3-Compatible Object Storage)
+
+**Replaces:** MinIO
+
+**What:** Tigris is a globally distributed, S3-compatible object storage built on FoundationDB. It's designed for modern applications that need multi-region data with zero replication configuration.
+
+**Why it's interesting:**
+- **Global distribution** — objects are automatically cached in the region closest to the reader. Useful if ingestion happens in one region but queries come from everywhere.
+- **Metadata search** — query object metadata directly without a separate index. Find all PDFs in a project without listing the entire bucket.
+- **FoundationDB core** — learning FoundationDB's architecture is valuable. It's the most interesting distributed database design in existence (used by Apple at massive scale).
+
+**Alternative to consider: SeaweedFS** — a simpler, high-performance distributed file system with S3 API, FUSE mount, and built-in Filer for metadata. Better for self-hosted deployments where you want raw throughput.
+
+---
+
+## 55. ClickHouse instead of ScyllaDB for Analytics
+
+**Replaces:** ScyllaDB (for analytical/read-heavy workloads, not for transactional writes)
+
+**What:** Use ScyllaDB for the transactional job/file tracking but add ClickHouse as a dedicated analytical store for ingestion metrics, usage analytics, and corpus-level queries.
+
+**Why it's interesting:**
+- **Column-oriented** — scans over millions of rows in milliseconds. "Average ingestion time by file type over 90 days" is instant.
+- **Materialized views** — pre-compute aggregations (hourly ingestion counts, failure rates per project) that refresh automatically.
+- **SQL interface** — familiar query language, unlike CQL's restrictions.
+- **chDB** — embedded ClickHouse that runs in-process as a Python library, like DuckDB but with ClickHouse's engine. No server needed for dev.
+
+---
+
+## 56. Rust Sidecar for CPU-Heavy Parsing (PyO3)
+
+**Replaces:** Python-based Docling parsing (partially)
+
+**What:** Write performance-critical parsing logic (PDF text extraction, chunking, content hashing) as a Rust library exposed to Python via PyO3/maturin.
+
+**Why it's interesting:**
+- **10-100x speedup** — Rust processes raw bytes and text much faster than Python. Chunking large documents, hashing, and Markdown manipulation are all CPU-bound and benefit enormously.
+- **Memory safety** — no GIL contention, no memory leaks from long-running worker processes.
+- **PyO3 + maturin** — build a Rust crate that compiles to a Python-importable `.so` file. Call Rust functions from Python as if they're native. `pip install` just works.
+- **Incremental adoption** — don't rewrite everything. Start with the hottest path (chunking + hashing) and measure.
+
+```toml
+# Cargo.toml for the Rust sidecar
+[lib]
+name = "nexus_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+```
+
+---
+
+## 57. Deno / Bun Workers for Lightweight Transform Functions
+
+**Replaces:** Python-based transform plugins (idea #12)
+
+**What:** Run user-defined transforms as Deno or Bun scripts in isolated V8 sandboxes instead of Python or Wasm.
+
+**Why it's interesting:**
+- **TypeScript/JavaScript** — larger pool of developers than Rust/Wasm. Most teams can write a transform function in TypeScript immediately.
+- **Deno's permission model** — granular capabilities (`--allow-net`, `--allow-read`). Run user code without worrying about filesystem or network access.
+- **Sub-millisecond startup** — V8 isolates spin up nearly instantly, unlike Python subprocess or container spin-up.
+- **Bun** — if raw speed matters, Bun's runtime is significantly faster than Deno/Node for text processing workloads.
+
+---
+
+## 58. CockroachDB or TiDB instead of ScyllaDB (Distributed SQL)
+
+**Replaces:** ScyllaDB
+
+**What:** Use a distributed SQL database instead of a wide-column NoSQL store.
+
+**Why it's interesting:**
+- **SQL** — no CQL restrictions. JOINs, subqueries, window functions, CTEs. The query patterns in `ingestion.py` (filtering by source AND project_id, counting file statuses) would be simpler and more flexible.
+- **CockroachDB** — Postgres-compatible wire protocol. Every Postgres library works. Distributed ACID transactions. No materialized views needed for secondary access patterns.
+- **TiDB** — MySQL-compatible. Built-in HTAP (hybrid transactional + analytical). Query real-time analytics AND transactional data in the same DB, no separate ClickHouse/DuckDB needed.
+- **Serializable isolation** — no more worrying about concurrent status updates causing inconsistencies.
+
+**Trade-off:** ScyllaDB has lower write latency at extreme scale. CockroachDB/TiDB are better when query flexibility matters more than raw write throughput.
+
+---
+---
+
+# New Companion Services to Build
+
+Complete service ideas that complement the ingestion pipeline. Each includes a recommended tech stack.
+
+---
+
+## 59. Nexus Query Service (Standalone RAG API)
+
+**What it does:** Handles all retrieval and generation — semantic search, hybrid search, RAG with streaming LLM responses, conversation history.
+
+**Recommended stack:**
+- **Language:** Python (FastAPI) or Rust (Axum) for lower latency
+- **Vector search:** Qdrant (shared instance with ingestion)
+- **LLM:** OpenAI / Anthropic Claude via API, or local inference with vLLM
+- **Conversation state:** Valkey (short-lived conversation turns) or SurrealDB
+- **Streaming:** SSE for streaming LLM token output
+- **Caching:** Semantic cache in Qdrant (idea #13) + Valkey for exact-match dedup
+
+**Why a separate service:** Ingestion is CPU/GPU-bound and bursty. Retrieval is latency-sensitive and steady-state. Mixing them in one process means a large ingestion batch starves query latency. Separate services scale independently.
+
+---
+
+## 60. Nexus Gateway (API Gateway / BFF)
+
+**What it does:** A single entry point that sits in front of the ingestion service, query service, and any future services. Handles auth, rate limiting, request routing, and API versioning.
+
+**Recommended stack:**
+- **Option A: Kong or Traefik** — mature API gateways with plugin ecosystems. Kong has rate limiting, JWT auth, and request transformation built in. Traefik integrates natively with Docker and Kubernetes service discovery.
+- **Option B: Hono on Cloudflare Workers** — if you want something modern and lightweight. Hono is a fast web framework for edge runtimes. Handles auth, routing, and rate limiting at the edge before traffic hits your origin.
+- **Option C: Custom FastAPI gateway** — if you want full control. A thin FastAPI service that validates JWTs, applies rate limits (via Valkey), and proxies to backend services. Simpler than it sounds.
+
+**Why build this:** Right now the ingestion service has no auth and `allow_origins=["*"]`. Before adding more services, centralize auth and rate limiting in one place.
+
+---
+
+## 61. Nexus Evaluation Service (RAG Quality Benchmarking)
+
+**What it does:** An automated evaluation pipeline that measures retrieval quality:
+- Run a suite of test queries against the knowledge base
+- Measure precision, recall, MRR (Mean Reciprocal Rank), and NDCG
+- Compare different embedding models, chunking strategies, and search parameters
+- Generate reports showing retrieval quality trends over time
+- Integrate with CI — fail a PR if retrieval quality degrades after a code change
+
+**Recommended stack:**
+- **Framework:** RAGAS or DeepEval for RAG evaluation metrics
+- **Test data:** Synthetic questions from idea #48, or manually curated Q&A pairs
+- **Storage:** ClickHouse for evaluation results (time-series analytical queries)
+- **Orchestration:** Temporal (reuse existing infra) for scheduled evaluation runs
+- **Visualization:** Grafana dashboards showing quality metrics over time
+
+---
+
+## 62. Nexus Embedding Service (Centralized Embedding Infrastructure)
+
+**What it does:** A standalone, high-throughput embedding service that any other service (ingestion, query, analytics) calls for embeddings. Centralizes model management, batching, and caching.
+
+**Recommended stack:**
+- **Inference server:** vLLM (GPU), or Hugging Face TEI (Text Embeddings Inference) for production. Supports dynamic batching, quantization, and multi-GPU.
+- **API:** OpenAI-compatible `/v1/embeddings` endpoint (idea #34)
+- **Caching:** Valkey for content-hash → embedding cache
+- **Queue:** NATS JetStream for async batch embedding requests
+- **Models:** Host multiple models simultaneously (OpenAI text-embedding-3-small, mxbai-embed-large-v1, multilingual models) and route per-request
+
+**Why a separate service:** Embeddings are used everywhere — ingestion, search, semantic caching, analytics clustering. A central service avoids duplicating model loading, GPU allocation, and caching logic across every consumer.
+
+---
+
+## 63. Nexus Document Processing Service (Heavy Compute)
+
+**What it does:** Offloads the heaviest compute — OCR, table extraction, image description, audio transcription — from the ingestion pipeline into a dedicated service optimized for GPU throughput.
+
+**Recommended stack:**
+- **OCR / Parsing:** Docling (current), Marker (faster PDF-to-Markdown), or Unstructured.io
+- **Vision:** Florence-2 or Qwen2.5-VL for describing images/diagrams (runs locally on GPU, no API cost)
+- **Audio:** Whisper large-v3 via faster-whisper (CTranslate2 backend, 4x faster than OpenAI Whisper)
+- **GPU management:** NVIDIA Triton Inference Server for multi-model serving on shared GPUs
+- **Queue:** Temporal task queue (dedicated `PARSE_QUEUE` from idea #16)
+
+**Why a separate service:** GPU resources are expensive. A dedicated processing service with its own scaling policy (idea #22) prevents GPU-bound parsing from blocking I/O-bound embedding or trivial DB writes.
+
+---
+
+## 64. Nexus Notification Service (Webhooks, Email, Chat)
+
+**What it does:** A general-purpose notification service that other services publish events to. It routes notifications to the right channel based on user preferences.
+
+**Recommended stack:**
+- **Event intake:** NATS JetStream consumer (subscribe to `jobs.>`, `alerts.>`, etc.)
+- **Delivery channels:** Webhook (httpx), Slack (Bolt SDK), Email (resend.com or SES), Discord (discord.py)
+- **Preference storage:** Valkey or SurrealDB (user -> channels -> filters)
+- **Retry/DLQ:** Temporal workflow per notification (auto-retry with backoff on webhook failures)
+- **Template engine:** Jinja2 for email/message templates
+
+**Why a separate service:** Notification logic (retry policies, rate limiting, template rendering, channel routing) is orthogonal to business logic. Every future service benefits from publishing a single NATS event and letting the notification service handle delivery.
+
+---
+---
+
+# Performance Recommendations
+
+Concrete performance improvements for the current codebase based on what's in the code today.
+
+---
+
+## P1. Batch Embedding Calls
+
+**Current:** `VectorStoreIndex` in `embed_markdown()` embeds nodes one at a time via LlamaIndex's default behavior.
+
+**Improvement:** Use OpenAI's batch embedding endpoint directly. Send chunks in batches of 100-2048 texts per API call instead of one at a time. The OpenAI embeddings API supports up to 2048 inputs per request.
+
+```python
+# Instead of LlamaIndex's VectorStoreIndex handling embedding internally,
+# batch-embed explicitly:
+response = await self.openai_client.embeddings.create(
+    model="text-embedding-3-small",
+    input=[node.text for node in batch],
+    dimensions=1536,
+)
+```
+
+**Impact:** 10-50x fewer API round trips. Massive latency reduction for large documents.
+
+---
+
+## P2. Streaming File Uploads to MinIO
+
+**Current:** The ingestion route reads entire file contents into memory (`file.file.read()`) before uploading to MinIO.
+
+**Improvement:** Stream file uploads directly to MinIO using `put_object()` with the file stream, avoiding loading the full file into memory. For large files (100MB+ PDFs, video files), this prevents OOM.
+
+```python
+# Stream directly instead of reading into memory
+await asyncio.to_thread(
+    minio.put_object,
+    bucket_name="nexus-uploads",
+    object_name=object_name,
+    data=file.file,
+    length=-1,  # unknown length, MinIO handles chunked upload
+    part_size=10 * 1024 * 1024,  # 10MB parts
+)
+```
+
+---
+
+## P3. Prepared Statement Warming
+
+**Current:** `ScyllaService._prepare()` lazily prepares statements on first use, which means the first request to each query pattern pays a latency penalty.
+
+**Improvement:** Pre-warm all known prepared statements during `initialize_scylla()`. The query strings are all known at compile time (they're in `IngestionRepository`). Prepare them all at startup.
+
+---
+
+## P4. Connection Pooling for OpenAI / Embedding API
+
+**Current:** `AsyncOpenAI` uses default httpx connection pool settings.
+
+**Improvement:** Configure the connection pool explicitly for high-concurrency embedding:
+
+```python
+import httpx
+client = AsyncOpenAI(
+    api_key=config.OPENAI_KEY,
+    http_client=httpx.AsyncClient(
+        limits=httpx.Limits(
+            max_connections=50,
+            max_keepalive_connections=20,
+        ),
+        timeout=httpx.Timeout(60.0),
+    ),
+)
+```
+
+**Impact:** Prevents connection exhaustion during burst embedding. Default httpx limits are conservative (100 total / 20 keepalive).
+
+---
+
+## P5. Qdrant Batch Upsert with `wait=False`
+
+**Current:** `VectorStoreIndex` upserts points to Qdrant via LlamaIndex's default behavior (likely sequential).
+
+**Improvement:** Use Qdrant's native batch upsert with `wait=False` for fire-and-forget writes when durability is handled by the workflow retry:
+
+```python
+await self.qdrant_client.upsert(
+    collection_name="nexus_knowledge_base",
+    points=batch_of_points,
+    wait=False,  # Don't wait for WAL flush — 2-3x faster writes
+)
+```
+
+**Impact:** 2-3x write throughput improvement. The Temporal retry policy already handles failures, so waiting for each WAL flush is unnecessary.
+
+---
+
+## P6. Enable gRPC for Qdrant
+
+**Current:** `QDRANT_PREFER_GRPC` defaults to `False`.
+
+**Improvement:** Set it to `True`. Qdrant's gRPC interface is 2-5x faster than REST for batch operations because Protobuf serialization is more efficient than JSON for vectors (arrays of 1536 floats).
+
+---
+
+## P7. Worker Concurrency Tuning
+
+**Current:** `asyncio.Semaphore(4)` is hardcoded in `parse_files`.
+
+**Improvement:** Make this configurable via environment variable. Optimal concurrency depends on hardware:
+- GPU worker with 24GB VRAM: semaphore of 2-4 (Docling is memory-hungry)
+- CPU-only worker: semaphore of 1-2
+- Embed-only worker (API calls): semaphore of 20-50 (I/O-bound)
+
+---
+
+## P8. ScyllaDB Token-Aware Load Balancing
+
+**Current:** Default `Cluster` configuration uses round-robin routing.
+
+**Improvement:** Enable token-aware routing so queries go directly to the node that owns the partition:
+
+```python
+from cassandra.policies import TokenAwarePolicy, DCAwareRoundRobinPolicy
+
+Cluster(
+    contact_points=contact_points,
+    load_balancing_policy=TokenAwarePolicy(DCAwareRoundRobinPolicy()),
+    connection_class=AsyncioConnection,
+)
+```
+
+**Impact:** Eliminates coordinator hops. Especially impactful as you scale beyond a single ScyllaDB node.
