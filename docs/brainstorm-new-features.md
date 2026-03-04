@@ -455,3 +455,247 @@ temporal-ui:
 - **Cost model** — pay per query, not per hour of running infrastructure. Great for bursty workloads where the knowledge base sits idle between queries.
 - **Object storage-backed** — vectors are stored in a durable, cheap layer. Scales to billions of vectors without provisioning.
 - Could be offered as a deployment option alongside self-hosted Qdrant — user picks based on their usage pattern.
+
+---
+---
+
+# AI-Native Integrations & Agent Ecosystem
+
+Ideas for making the knowledge base accessible to AI agents, LLM toolchains, and emerging protocols.
+
+---
+
+## 33. MCP Server (Model Context Protocol)
+
+**What:** Expose the knowledge base as an MCP server so any MCP-compatible AI client (Claude Desktop, Cursor, Claude Code, Windsurf, etc.) can search and retrieve documents as tool calls.
+
+**Why this is interesting:** MCP is becoming the standard protocol for giving AI models access to external data. Instead of building a custom UI, you build once and every AI client can use it. Tools to expose:
+- `search_knowledge_base(query, project_id?, top_k?)` — semantic search
+- `get_document(file_id)` — retrieve full document text
+- `list_projects()` — enumerate available projects
+- `ingest_url(url, project_id)` — trigger ingestion from an AI conversation
+- `get_job_status(job_id)` — check ingestion progress
+
+The MCP server is a thin wrapper around the existing API. Could be a separate Python process using the `mcp` SDK, or served over SSE/stdio.
+
+---
+
+## 34. OpenAI-Compatible `/v1/embeddings` Proxy
+
+**What:** Expose an OpenAI-compatible embeddings API endpoint that routes to your local GPU embedding server (Infinity/TEI from idea #17) or to the actual OpenAI API, transparently.
+
+**Why this is interesting:**
+- Any tool that supports OpenAI embeddings (LangChain, LlamaIndex, Haystack, custom apps) can point at your service and get embeddings without code changes
+- You control the routing — dev environments hit the local GPU, production hits OpenAI, and the caller doesn't know or care
+- Add transparent caching (idea #24) behind this proxy and every consumer benefits
+- Metrics and cost tracking in one place
+
+---
+
+## 35. LangChain / LlamaIndex Retriever Plugin
+
+**What:** Publish a Python package (`nexus-retriever`) that implements the LangChain `BaseRetriever` and LlamaIndex `BaseRetriever` interfaces, backed by your Qdrant knowledge base.
+
+**Why this is interesting:** Anyone building a RAG app with LangChain or LlamaIndex can `pip install nexus-retriever` and immediately use your knowledge base as a retrieval source. Turns your ingestion pipeline into a reusable building block for the broader ecosystem.
+
+```python
+from nexus_retriever import NexusRetriever
+
+retriever = NexusRetriever(base_url="http://localhost:8065", project_id="my-project")
+docs = retriever.invoke("how does authentication work?")
+```
+
+---
+
+## 36. AI Agent Tool Use — Function Calling Interface
+
+**What:** Build a standalone "research agent" service that uses LLM function calling (tool use) to orchestrate multi-step research over the knowledge base:
+- Break a complex question into sub-queries
+- Search the knowledge base for each sub-query
+- Cross-reference results across documents
+- Synthesize a final answer with citations and confidence scores
+
+**Why this is interesting:** Simple RAG (embed question → top-K → LLM) fails on complex questions that require reasoning across multiple documents. An agent loop with tool use handles "Compare the security policies across all three vendor proposals" by issuing multiple targeted searches and synthesizing the results.
+
+---
+
+## 37. Slack / Discord Bot
+
+**What:** A bot that sits in a Slack or Discord channel and answers questions from the knowledge base. Users `@mention` the bot with a question, it queries the RAG service, and posts the answer with source citations.
+
+**Why this is interesting:** Meets people where they already work. No need to context-switch to a separate app. Could also support:
+- `/ingest <url>` slash command to trigger URL ingestion from chat
+- Threaded follow-up questions with conversation memory
+- Channel-specific project scoping (bot in `#engineering` only searches the engineering project)
+
+---
+---
+
+# Developer Experience & API Design
+
+---
+
+## 38. CLI Tool (`nexus-cli`)
+
+**What:** A command-line tool for interacting with the ingestion service:
+```bash
+nexus ingest ./docs/ --project my-project --source jake
+nexus ingest https://docs.example.com --depth 2
+nexus status ingest-abc-123
+nexus search "how does auth work?" --project my-project --top-k 5
+nexus jobs --source jake --status failed
+nexus watch ingest-abc-123  # live progress, like docker logs -f
+```
+
+**Why this is interesting:** Power users and CI/CD pipelines want a CLI, not a REST API. The `watch` command streams job progress via SSE/WebSocket. Could be built with `typer` + `httpx` in a separate repo, published to PyPI.
+
+---
+
+## 39. Python SDK (`nexus-sdk`)
+
+**What:** A typed Python client library with async support:
+```python
+from nexus_sdk import NexusClient
+
+async with NexusClient("http://localhost:8065") as client:
+    job = await client.ingest(files=["report.pdf"], project_id="my-project")
+    async for event in client.watch(job.job_id):
+        print(f"{event.filename}: {event.status}")
+    results = await client.search("quarterly revenue", project_id="my-project")
+```
+
+**Why this is interesting:** Removes the friction of hand-writing HTTP requests. Typed models for all request/response objects, async iteration over WebSocket/SSE events, automatic retry with backoff. Makes it trivial for other services in the Nexus platform to integrate with ingestion.
+
+---
+
+## 40. gRPC API Alongside REST
+
+**What:** Add a gRPC interface for the ingestion and query endpoints, running on a separate port.
+
+**Why this is interesting:**
+- **Streaming** — gRPC server-streaming is a natural fit for job progress updates (like SSE, but with strong typing via Protobuf)
+- **Performance** — binary Protobuf serialization is 5-10x smaller than JSON for embedding vectors and document chunks
+- **Code generation** — clients in any language get auto-generated typed stubs from the `.proto` files
+- **Internal service mesh** — gRPC is the default for service-to-service communication in Kubernetes. If Nexus grows to multiple services, gRPC between them is natural.
+- Qdrant already uses gRPC (`QDRANT_PREFER_GRPC` is in your settings). Temporal uses gRPC internally. Adding gRPC to the API layer completes the picture.
+
+---
+
+## 41. Batch / Async API with Callback Webhooks
+
+**What:** Add a batch ingestion endpoint that accepts a list of files or URLs, returns a batch ID immediately, and calls a user-provided webhook URL when the batch completes (or on each file completion).
+
+```json
+POST /ingestion/batch
+{
+  "urls": ["https://example.com/doc1.pdf", "https://example.com/doc2.pdf"],
+  "project_id": "my-project",
+  "callback_url": "https://myapp.com/hooks/ingestion-complete",
+  "callback_events": ["job_completed", "job_failed", "file_completed"]
+}
+```
+
+**Why this is interesting:** Not every consumer wants to hold a WebSocket open. Webhooks are the standard pattern for async integrations. The callback payload matches the existing NATS event format, so it's just a new consumer that POSTs to the registered URL.
+
+---
+
+## 42. OpenAPI Spec + Generated Docs Portal
+
+**What:** FastAPI already auto-generates OpenAPI specs. Take it further:
+- Host a polished docs portal (Scalar, Redoc, or Stoplight Elements) at `/docs`
+- Add rich examples, request/response samples, and error code documentation
+- Generate SDKs from the OpenAPI spec using `openapi-generator` for TypeScript, Go, Rust, etc.
+- Publish the spec to a registry so consumers can auto-generate clients
+
+**Why this is interesting:** The existing FastAPI `/docs` is functional but minimal. A proper API portal with examples, guides, and multi-language SDK generation makes the service approachable for teams outside your immediate circle.
+
+---
+---
+
+# Deployment, IaC & DevOps
+
+---
+
+## 43. Terraform / Pulumi for Infrastructure as Code
+
+**What:** Define the entire infrastructure stack (Qdrant, MinIO, ScyllaDB, NATS, Temporal) as Terraform or Pulumi modules. Support multiple deployment targets: local Docker, AWS, GCP.
+
+**Why this is interesting:**
+- One command to spin up the full stack in any environment
+- Separate modules for each service — compose only what you need
+- Cloud-specific variants (Qdrant Cloud, Amazon S3 instead of MinIO, ScyllaDB Cloud, etc.)
+- State management and drift detection
+
+---
+
+## 44. GitOps with ArgoCD or FluxCD
+
+**What:** Deploy the Kubernetes manifests via GitOps. Push to `main`, ArgoCD syncs the cluster.
+
+**Why this is interesting:** Combined with Dockerfiles (#21), KEDA (#22), and Terraform (#43), this completes the deployment story. Changes to worker configuration, scaling policies, or infrastructure are all version-controlled and auditable.
+
+---
+
+## 45. Nix Flake for Reproducible Dev Environment
+
+**What:** Define a `flake.nix` that provisions the exact Python version, `uv`, system dependencies (poppler, tesseract for Docling), and all tooling in a single `nix develop` command.
+
+**Why this is interesting:** New contributors clone the repo, run `nix develop`, and have everything. No "works on my machine." Especially valuable because this project has heavy system dependencies (CUDA, torch, Docling's native parsers).
+
+---
+---
+
+# Data Processing & Intelligence
+
+---
+
+## 46. Chunking Strategy Experimentation Framework
+
+**What:** Currently chunks are created by `MarkdownNodeParser` with default settings. Build a framework to experiment with different strategies:
+- Fixed-size token windows with overlap
+- Semantic chunking (split on topic boundaries using embeddings)
+- Hierarchical chunking (paragraph → section → document, with parent-child relationships in Qdrant)
+- Late chunking (embed the full document, then split — preserves cross-chunk context)
+
+Store chunks from different strategies in separate Qdrant collections. Run the same queries against each and compare retrieval quality.
+
+**Why this is interesting:** Chunking is the single biggest lever on RAG quality and there's no one-size-fits-all answer. A framework for A/B testing strategies against real queries is extremely valuable.
+
+---
+
+## 47. Code-Aware Ingestion
+
+**What:** Detect source code files and use AST parsing instead of Markdown conversion:
+- Parse Python, TypeScript, Go, Rust, etc. into AST
+- Extract functions, classes, docstrings, type signatures as separate chunks
+- Preserve call graphs and import relationships as metadata
+- Embed function-level chunks with rich context (file path, class, signature)
+
+**Why this is interesting:** Docling treats code as plain text, which loses structural information. AST-aware chunking means a search for "authentication middleware" returns the actual function definition, not a random line that mentions auth. Could use `tree-sitter` for multi-language AST parsing.
+
+---
+
+## 48. Synthetic Question Generation
+
+**What:** After ingesting documents, use an LLM to generate synthetic questions that each chunk should be able to answer. Store the questions alongside the chunks in Qdrant as additional embedding targets.
+
+**Why this is interesting:**
+- Bridges the vocabulary gap — documents use formal language, users ask casual questions. The synthetic questions are phrased how a user would ask.
+- Dramatically improves retrieval recall for chunks that contain answers but don't use the same words as the query
+- The synthetic questions can also serve as a test suite for measuring retrieval quality — "does the system return the right chunk for this question?"
+
+---
+
+## 49. Cross-Lingual / Multilingual Embedding
+
+**What:** Use multilingual embedding models (Cohere `embed-multilingual-v3.0`, or multilingual E5) so documents in any language are searchable from queries in any other language.
+
+**Why this is interesting:** A company with docs in English, German, and Japanese could search across all of them with a single English query. The multilingual model maps semantically equivalent text to nearby vectors regardless of language. Could be an opt-in per-project setting.
+
+---
+
+## 50. Document Lineage & Dependency Graph
+
+**What:** Track which documents reference or depend on other documents. When a source document is re-ingested or deleted, identify all downstream documents that may be affected.
+
+**Why this is interesting:** In regulated environments (healthcare, finance, legal), you need to know: "if this policy document changes, which other documents cite it?" Temporal workflows can trigger cascading re-ingestion when a dependency changes. Store lineage as edges in ScyllaDB or the knowledge graph from idea #6.
