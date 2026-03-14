@@ -1,3 +1,6 @@
+from io import BytesIO
+from pathlib import Path
+
 from docling.document_converter import DocumentConverter
 from docling_core.types.io import DocumentStream
 from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
@@ -47,12 +50,23 @@ class IngestionService:
         """Process file"""
         logger.info(f"Parsing file: {ctx.file_name}")
 
+        markdown_text = ""
+
         if ctx.is_plain_text:
-            markdown_text = ctx.file_stream.read().decode("utf-8")
+            if ctx.file_path:
+                markdown_text = Path(ctx.file_path).read_text("utf-8")
+            elif ctx.file_stream is not None:
+                markdown_text = ctx.file_stream.read().decode("utf-8")
         else:
-            doc_stream = DocumentStream(name=ctx.file_name, stream=ctx.file_stream)
-            conversion_result = self.converter.convert(doc_stream)
-            markdown_text = conversion_result.document.export_to_markdown()
+            if ctx.file_path:
+                conversion_result = self.converter.convert(Path(ctx.file_path))
+                markdown_text = conversion_result.document.export_to_markdown()
+            elif ctx.file_stream is not None:
+                doc_stream = DocumentStream(
+                    name=ctx.file_name, stream=BytesIO(ctx.file_stream.read())
+                )
+                conversion_result = self.converter.convert(doc_stream)
+                markdown_text = conversion_result.document.export_to_markdown()
 
         logger.info(f"Successfully parsed file: {ctx.file_name}")
         return markdown_text
@@ -69,16 +83,18 @@ class IngestionService:
             },
         )
 
-    async def embed_markdown(
+    async def embed_single_document(
         self,
         request: IngestionWorkflowRequest,
-        processed_files: list[Document],
-    ):
+        document: Document,
+    ) -> None:
         splitter = MarkdownNodeParser()
 
-        logger.info("Splitting documents into nodes")
-        nodes = splitter.get_nodes_from_documents(processed_files)
-        logger.info(f"Created {len(nodes)} nodes from documents")
+        logger.info(
+            f"Splitting document into nodes: {document.metadata.get('filename')}"
+        )
+        nodes = splitter.get_nodes_from_documents([document])
+        logger.info(f"Created {len(nodes)} nodes from document")
 
         for node in nodes:
             node.metadata["source"] = request.source
@@ -91,6 +107,7 @@ class IngestionService:
             storage_context=storage_context,
             show_progress=False,
             use_async=True,
+            insert_batch_size=128,
         )
 
-        logger.info("Ingestion pipeline completed successfully")
+        logger.info(f"Embedded document: {document.metadata.get('filename')}")

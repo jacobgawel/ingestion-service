@@ -51,8 +51,7 @@ async def main():
         task_queue=WORKER_QUEUE.INGESTION,
         workflows=[IngestionWorkflow],
         activities=[
-            activities.parse_files,
-            activities.embed_markdown,
+            activities.parse_and_embed,
             activities.finalize_job,
         ],
     )

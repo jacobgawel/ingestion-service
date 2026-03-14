@@ -70,6 +70,25 @@ services:
     networks:
       - nexus-network
 
+  alloydb-omni:
+    image: google/alloydbomni:latest
+    container_name: nexus-alloydb
+    ports:
+      - "5433:5432"
+    volumes:
+      - alloydb_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: ${ALLOYDB_PASSWORD:-nexus-dev-password}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - nexus-network
+
   # mixedbread:
   #   image: michaelf34/infinity:latest
   #   container_name: nexus-mixedbread
@@ -117,6 +136,8 @@ volumes:
   minio:
     driver: local
   scylla_data:
+    driver: local
+  alloydb_data:
     driver: local
 networks:
   nexus-network:

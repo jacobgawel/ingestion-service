@@ -1,15 +1,17 @@
 import asyncio
+import gc
 import json
+import os
+import tempfile
 from typing import List
 
-from llama_index.core import Document
 from nats.aio.client import Client as NATSClient
 from temporalio import activity
 
-from app.clients import get_minio_handler
 from app.clients.minio_client import MinioManager
 from app.core.enums import INGESTION_STATUS
 from app.core.logger import get_logger
+from app.core.settings import config
 from app.core.temporal import INGESTION_ACTIVITY
 from app.models.workflows import (
     FileProcessingContext,
@@ -44,49 +46,49 @@ class IngestionActivities:
 
     def _download_and_parse_sync(
         self, request: IngestionWorkflowRequest, file_payload: IngestionFilePayload
-    ) -> Document:
-        """Synchronous function to download and parse file data"""
+    ):
+        """Download file to temp disk, parse to Document, then discard the file."""
+        ext = os.path.splitext(file_payload.filename or "")[1]
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=True) as tmp:
+            self.minio_handler.download_file(file_payload.object_name, tmp.name)
 
-        file_stream = get_minio_handler().get_file_stream(
-            object_name=file_payload.object_name
-        )
+            ctx = FileProcessingContext.from_request(
+                file_name=file_payload.filename or "default",
+                request=request,
+                file_path=tmp.name,
+            )
 
-        ctx = FileProcessingContext.from_request(
-            file_stream=file_stream,
-            file_name=file_payload.filename or "default",
-            request=request,
-        )
+            return self._ingestion_service.process_file(ctx)
 
-        return self._ingestion_service.process_file(ctx)
-
-    @activity.defn(name=INGESTION_ACTIVITY.PARSE_FILES)
-    async def parse_files(
+    @activity.defn(name=INGESTION_ACTIVITY.PARSE_AND_EMBED)
+    async def parse_and_embed(
         self,
         job_id: str,
         request: IngestionWorkflowRequest,
         files: List[IngestionFilePayload],
-    ) -> list[Document]:
+    ) -> str:
         """
-        Activity 1: Returns the Markdown string.
+        Activity: Download, parse, and embed each file one at a time.
+        Returns a status string (no large payloads in Temporal history).
         """
-
         total_files = len(files)
-
-        # Determine concurrency limit (e.g., process 4 files at a time)
-        semaphore = asyncio.Semaphore(4)
+        semaphore = asyncio.Semaphore(config.MAX_CONCURRENT_FILES)
 
         async def _process_single_file(
             index: int, file_payload: IngestionFilePayload
-        ) -> Document | None:
+        ) -> bool:
             async with semaphore:
                 activity.heartbeat(
-                    f"Parsing file {index + 1}/{total_files}: {file_payload.filename}"
+                    f"Processing file {index + 1}/{total_files}: {file_payload.filename}"
                 )
 
                 try:
                     doc = await asyncio.to_thread(
                         self._download_and_parse_sync, request, file_payload
                     )
+                    await self._ingestion_service.embed_single_document(request, doc)
+                    del doc
+                    gc.collect()
 
                     if file_payload.file_id:
                         await self._repo.update_file_status(
@@ -105,9 +107,9 @@ class IngestionActivities:
                             },
                         )
 
-                    return doc
+                    return True
                 except Exception as e:
-                    logger.error(f"Failed to parse file {file_payload.filename}: {e}")
+                    logger.error(f"Failed to process file {file_payload.filename}: {e}")
 
                     if file_payload.file_id:
                         await self._repo.update_file_status(
@@ -127,31 +129,14 @@ class IngestionActivities:
                             },
                         )
 
-                    return None
+                    return False
 
-        # Create tasks for all files
         tasks = [_process_single_file(i, file) for i, file in enumerate(files)]
-
-        # Run them concurrently
         results = await asyncio.gather(*tasks)
 
-        # Filter out failed files (None values)
-        return [doc for doc in results if doc is not None]
-
-    @activity.defn(name=INGESTION_ACTIVITY.EMBED_MARKDOWN)
-    async def embed_markdown(
-        self,
-        request: IngestionWorkflowRequest,
-        processed_files: list[Document],
-    ) -> str:
-        """
-        Activity 2: Takes Markdown, returns Status.
-        """
-        await self._ingestion_service.embed_markdown(
-            request=request,
-            processed_files=processed_files,
-        )
-        return "Success"
+        succeeded = sum(1 for r in results if r)
+        failed = total_files - succeeded
+        return f"Processed {succeeded}/{total_files} files ({failed} failed)"
 
     @activity.defn(name=INGESTION_ACTIVITY.FINALIZE_JOB)
     async def finalize_job(
@@ -162,7 +147,7 @@ class IngestionActivities:
         error_message: str | None,
     ) -> None:
         """
-        Activity 3: Finalize the job status in ScyllaDB.
+        Activity: Finalize the job status in ScyllaDB.
         """
         await self._repo.finalize_job(
             job_id=job_id,

@@ -1,5 +1,4 @@
-from io import BytesIO
-from typing import List, Optional
+from typing import BinaryIO, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field
@@ -26,8 +25,9 @@ class FileProcessingContext(BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    file_stream: BytesIO
+    file_stream: Optional[BinaryIO] = None
     file_name: str
+    file_path: Optional[str] = None
     source: Optional[str] = None
     project_id: Optional[str] = None
 
@@ -46,13 +46,15 @@ class FileProcessingContext(BaseModel):
     @classmethod
     def from_request(
         cls,
-        file_stream: BytesIO,
         file_name: str,
         request: IngestionWorkflowRequest,
+        file_path: Optional[str] = None,
+        file_stream: Optional[BinaryIO] = None,
     ) -> "FileProcessingContext":
         return cls(
             file_stream=file_stream,
             file_name=file_name,
+            file_path=file_path,
             source=request.source,
             project_id=request.project_id,
         )

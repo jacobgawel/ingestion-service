@@ -6,6 +6,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.clients.alloydb_client import close_alloydb, initialize_alloydb
 from app.clients.minio_client import _minio_singleton
 from app.clients.nats_client import close_nats, initialize_nats
 from app.clients.scylla_client import close_scylla, initialize_scylla
@@ -29,6 +30,9 @@ async def lifespan(app_client: FastAPI):
     logger.info("Initializing ScyllaDB client...")
     await initialize_scylla()
 
+    logger.info("Initializing AlloyDB client...")
+    await initialize_alloydb()
+
     logger.info("Initializing NATS client...")
     await initialize_nats()
 
@@ -39,6 +43,7 @@ async def lifespan(app_client: FastAPI):
     # Shutdown
     logger.info("Shutting down clients...")
     await close_nats()
+    await close_alloydb()
     await close_temporal()
     await close_scylla()
     _minio_singleton.close()

@@ -66,6 +66,24 @@ class Settings(BaseSettings):
         default="nats://localhost:4222", description="NATS server URL"
     )
 
+    # AlloyDB
+    ALLOYDB_HOST: str = Field(default="localhost", description="AlloyDB server host")
+    ALLOYDB_PORT: int = Field(default=5432, description="AlloyDB server port")
+    ALLOYDB_DATABASE: str = Field(
+        default="postgres", description="AlloyDB database name"
+    )
+    ALLOYDB_USER: str | None = Field(
+        default=None, description="AlloyDB authentication username"
+    )
+    ALLOYDB_PASSWORD: str | None = Field(
+        default=None, description="AlloyDB authentication password"
+    )
+
+    # Worker
+    MAX_CONCURRENT_FILES: int = Field(
+        default=4, description="Max concurrent file processing in worker"
+    )
+
     # Minio
     MINIO_HOST: str = Field(..., description="Minio host name")
     MINIO_ACCESS_KEY: str = Field(..., description="Minio access key")

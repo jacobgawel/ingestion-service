@@ -1,3 +1,4 @@
+from .alloydb_client import get_alloydb_pool
 from .minio_client import get_minio_handler
 from .mixedbread_client import get_mixedbread_client
 from .nats_client import get_nats_client
@@ -7,6 +8,7 @@ from .scylla_client import get_scylla_session
 from .temporal_client import get_temporal_client
 
 __all__ = [
+    "get_alloydb_pool",
     "get_minio_handler",
     "get_mixedbread_client",
     "get_nats_client",

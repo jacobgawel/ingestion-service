@@ -6,8 +6,7 @@ class WORKER_QUEUE(StrEnum):
 
 
 class INGESTION_ACTIVITY(StrEnum):
-    PARSE_FILES = "parse_files"
-    EMBED_MARKDOWN = "embed_markdown"
+    PARSE_AND_EMBED = "parse_and_embed"
     FINALIZE_JOB = "finalize_job"
 
 

@@ -46,48 +46,35 @@ async def ingest_data(
     file_payloads: list[IngestionFilePayload] = []
 
     try:
-        # Phase 1: Load all files into memory
-        files_in_memory = []
+        # Phase 1: Upload all files to MinIO
+        for file_data in files:
+            file_data.file.seek(0, 2)
+            size = file_data.file.tell()
+            file_data.file.seek(0)
 
-        for file in files:
-            file.file.seek(0)
-            file_content = file.file.read()
-            files_in_memory.append(
-                {
-                    "filename": file.filename,
-                    "content": file_content,
-                    "content_type": file.content_type,
-                    "size": len(file_content),
-                }
-            )
-
-        logger.info(f"Loaded {len(files_in_memory)} files into memory")
-
-        # Phase 2: Upload all files to MinIO
-        for file_data in files_in_memory:
             # 1. GENERATE UNIQUE OBJECT NAME
             object_name = (
-                f"{request_data.project_id}/{uuid.uuid4()}-{file_data['filename']}"
+                f"{request_data.project_id}/{uuid.uuid4()}-{file_data.filename}"
             )
 
             # 2. UPLOAD TO MINIO
             await asyncio.to_thread(
                 minio.upload_file,
-                file_data=file_data["content"],
-                size=file_data["size"],
+                file_data=file_data.file,
+                size=size,
                 object_name=object_name,
             )
 
             # 3. PREPARE PAYLOAD
             file_payloads.append(
                 IngestionFilePayload(
-                    filename=file_data["filename"],
+                    filename=file_data.filename,
                     object_name=object_name,
-                    content_type=file_data["content_type"],
+                    content_type=file_data.content_type,
                 )
             )
 
-        logger.info(f"Finished uploading: {len(files_in_memory)} files")
+        logger.info(f"Finished uploading: {len(files)} files")
 
         # Phase 3: Build workflow DTO
         workflow_dto = IngestionWorkflowDTO(

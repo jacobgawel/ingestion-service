@@ -1,6 +1,5 @@
 """MinIO client singleton instance."""
 
-import io
 from typing import Optional
 
 import boto3
@@ -54,20 +53,6 @@ class MinioManager:
                 "MinIO client not initialized. Call 'minio_manager.initialize()' first."
             )
         return self._client
-
-    def get_file_stream(self, object_name: str) -> io.BytesIO:
-        """
-        Downloads file into an in-memory byte stream.
-        WARNING: High RAM usage for large files.
-        TODO: Come back to this later and just write to disk
-        """
-        try:
-            response = self.client.get_object(Bucket=self._bucket_name, Key=object_name)
-            file_data = io.BytesIO(response["Body"].read())
-            file_data.seek(0)
-            return file_data
-        except Exception as e:
-            raise Exception(f"Failed to download {object_name}: {str(e)}")
 
     def upload_file(self, file_data, size: int, object_name: str):
         """Uploads a stream to MinIO."""
