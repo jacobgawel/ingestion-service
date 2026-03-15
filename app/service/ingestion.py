@@ -1,9 +1,13 @@
 import asyncio
 import base64
+import re
 from io import BytesIO
 from pathlib import Path
 
-from docling.document_converter import DocumentConverter
+from docling.datamodel.document import ConversionResult
+from docling.datamodel.pipeline_options import PaginatedPipelineOptions
+from docling.document_converter import DocumentConverter, InputFormat, PdfFormatOption
+from docling_core.types.doc.document import PictureItem
 from docling_core.types.io import DocumentStream
 from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import MarkdownNodeParser
@@ -37,7 +41,16 @@ class IngestionService:
         mixedbread_client: AsyncMixedbread,
     ):
         logger.info("Initializing IngestionService")
-        self.converter = DocumentConverter()
+        pdf_pipeline_options = PaginatedPipelineOptions(
+            generate_picture_images=True,
+        )
+        self.converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(
+                    pipeline_options=pdf_pipeline_options,
+                ),
+            },
+        )
         self.qdrant_client = qdrant_client
         self.openai_client = openai_client
         self.mixedbread_client = mixedbread_client
@@ -104,11 +117,39 @@ class IngestionService:
         logger.info(f"Successfully captioned image: {file_path}")
         return caption
 
-    async def _parse_file(self, ctx: FileProcessingContext) -> str:
-        """Process file into text content."""
+    def _extract_images_from_document(
+        self, conversion_result: ConversionResult
+    ) -> list[bytes]:
+        """Extract images from a Docling conversion result as PNG bytes."""
+        images: list[bytes] = []
+        doc = conversion_result.document
+        for item, _ in doc.iterate_items(with_groups=False):
+            if isinstance(item, PictureItem):
+                pil_img = item.get_image(doc=doc)
+                if pil_img is not None:
+                    buf = BytesIO()
+                    pil_img.save(buf, format="PNG")
+                    images.append(buf.getvalue())
+        return images
+
+    def _replace_image_placeholders(self, markdown_text: str) -> str:
+        """Replace <!-- image --> placeholders with indexed versions."""
+        counter = 0
+
+        def _replacer(match: re.Match[str]) -> str:
+            nonlocal counter
+            replacement = f"<!-- image:{counter} -->"
+            counter += 1
+            return replacement
+
+        return re.sub(r"<!-- image -->", _replacer, markdown_text)
+
+    async def _parse_file(self, ctx: FileProcessingContext) -> tuple[str, list[bytes]]:
+        """Process file into text content and extracted images."""
         logger.info(f"Parsing file: {ctx.file_name}")
 
         markdown_text = ""
+        images: list[bytes] = []
 
         if ctx.is_image:
             if ctx.file_path:
@@ -130,6 +171,7 @@ class IngestionService:
                     self.converter.convert, Path(ctx.file_path)
                 )
                 markdown_text = conversion_result.document.export_to_markdown()
+                images = self._extract_images_from_document(conversion_result)
             elif ctx.file_stream is not None:
                 doc_stream = DocumentStream(
                     name=ctx.file_name, stream=BytesIO(ctx.file_stream.read())
@@ -138,15 +180,24 @@ class IngestionService:
                     self.converter.convert, doc_stream
                 )
                 markdown_text = conversion_result.document.export_to_markdown()
+                images = self._extract_images_from_document(conversion_result)
 
-        logger.info(f"Successfully parsed file: {ctx.file_name}")
+        markdown_text = self._replace_image_placeholders(markdown_text)
 
-        return markdown_text
+        logger.info(
+            f"Successfully parsed file: {ctx.file_name} "
+            f"({len(images)} images extracted)"
+        )
 
-    async def process_file(self, ctx: FileProcessingContext) -> Document:
-        result = await self._parse_file(ctx)
-        return Document(
-            text=result,
+        return markdown_text, images
+
+    async def process_file(
+        self, ctx: FileProcessingContext
+    ) -> tuple[Document, list[bytes]]:
+        """Process a file and return the document and extracted images."""
+        markdown_text, images = await self._parse_file(ctx)
+        doc = Document(
+            text=markdown_text,
             metadata={
                 "filename": ctx.file_name,
                 "file_extension": ctx.file_extension,
@@ -154,6 +205,7 @@ class IngestionService:
                 "project_id": ctx.project_id,
             },
         )
+        return doc, images
 
     async def embed_single_document(
         self,

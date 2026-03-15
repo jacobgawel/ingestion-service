@@ -44,6 +44,43 @@ class IngestionActivities:
         except Exception as e:
             logger.warning(f"Failed to publish NATS message to {subject}: {e}")
 
+    def _get_base_path(self, object_name: str) -> str:
+        """Get the directory path in MinIO for a given object name."""
+        # object_name is like "project_id/uuid-filename.pdf"
+        # base_path should be "project_id/uuid-filename" (without extension)
+        return os.path.splitext(object_name)[0]
+
+    async def _upload_artifacts(
+        self,
+        object_name: str,
+        markdown_text: str,
+        images: list[bytes],
+    ) -> None:
+        """Upload markdown.txt and extracted images alongside the original file."""
+        base_path = self._get_base_path(object_name)
+
+        # Upload markdown.txt
+        markdown_key = f"{base_path}/markdown.txt"
+        await asyncio.to_thread(
+            self.minio_handler.upload_bytes,
+            data=markdown_text.encode("utf-8"),
+            object_name=markdown_key,
+            content_type="text/plain",
+        )
+        logger.info(f"Uploaded markdown to {markdown_key}")
+
+        # Upload extracted images
+        for idx, image_bytes in enumerate(images):
+            image_key = f"{base_path}/images/{idx}.png"
+            await asyncio.to_thread(
+                self.minio_handler.upload_bytes,
+                data=image_bytes,
+                object_name=image_key,
+                content_type="image/png",
+            )
+        if images:
+            logger.info(f"Uploaded {len(images)} images to {base_path}/images/")
+
     async def _download_and_parse_sync(
         self, request: IngestionWorkflowRequest, file_payload: IngestionFilePayload
     ):
@@ -58,7 +95,14 @@ class IngestionActivities:
                 file_path=tmp.name,
             )
 
-            doc = await self._ingestion_service.process_file(ctx)
+            doc, images = await self._ingestion_service.process_file(ctx)
+
+            # Upload markdown and images alongside the original file in MinIO
+            await self._upload_artifacts(
+                object_name=file_payload.object_name,
+                markdown_text=doc.text,
+                images=images,
+            )
 
             if file_payload.file_id is not None:
                 await self._repo.update_markdown_by_fileid(

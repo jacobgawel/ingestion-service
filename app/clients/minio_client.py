@@ -64,6 +64,21 @@ class MinioManager:
         )
         return object_name
 
+    def upload_bytes(
+        self,
+        data: bytes,
+        object_name: str,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        """Uploads raw bytes to MinIO."""
+        self.client.put_object(
+            Bucket=self._bucket_name,
+            Key=object_name,
+            Body=data,
+            ContentType=content_type,
+        )
+        return object_name
+
     def download_file(self, object_name: str, file_path: str):
         """Downloads file from MinIO to local disk (for processing)."""
         self.client.download_file(
