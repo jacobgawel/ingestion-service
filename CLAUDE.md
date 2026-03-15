@@ -11,7 +11,7 @@ Ingestion Service — a document ingestion and vector embedding pipeline built w
 - **Package Manager:** UV (astral-sh/uv)
 - **Workflow Engine:** Temporal
 - **Vector DB:** Qdrant
-- **Database:** ScyllaDB (via scylla-driver)
+- **Databases:** ScyllaDB (via scylla-driver), AlloyDB (via asyncpg)
 - **Object Storage:** MinIO (via boto3)
 - **Messaging:** NATS (via nats-py) — pub/sub for real-time job updates
 - **Embeddings:** OpenAI / Mixedbread
@@ -32,7 +32,7 @@ uv run ./main.py
 # Start the Temporal worker
 uv run -m app.worker
 
-# Start infrastructure (Qdrant + MinIO + ScyllaDB + NATS)
+# Start infrastructure (Qdrant + MinIO + ScyllaDB + NATS + AlloyDB)
 docker compose up --build -d
 
 # Run pre-commit checks (lint, format, type check, security)
@@ -55,7 +55,7 @@ All configured in `.pre-commit-config.yaml`:
 
 ```
 app/
-├── clients/       # Singleton client managers (Temporal, MinIO, Qdrant, OpenAI, Mixedbread, ScyllaDB, NATS)
+├── clients/       # Singleton client managers (Temporal, MinIO, Qdrant, OpenAI, Mixedbread, ScyllaDB, NATS, AlloyDB)
 ├── core/          # Settings (Pydantic BaseSettings), enums, logger, dependencies, minio helpers, temporal constants
 ├── models/        # Pydantic request/response models (api.py, workflows.py)
 ├── repositories/  # Data-access layer (domain-specific DB queries per feature)
@@ -68,7 +68,7 @@ main.py            # FastAPI app entrypoint
 
 ## Architecture Patterns
 
-- **Singleton pattern** for all client managers (some initialize eagerly in `__init__`, others use explicit `initialize()` calls at app startup)
+- **Singleton pattern** for all client managers. Eager initialization in `__init__`: OpenAI, Qdrant, Mixedbread. Async `initialize()` at startup: Temporal, ScyllaDB, NATS, AlloyDB. Synchronous `initialize()`: MinIO
 - **Repository pattern** for domain-specific DB queries (`app/repositories/`). Each feature gets its own repository file (e.g., `ingestion.py`). Repositories depend on `ScyllaService` for query execution.
 - **Dependency injection** via FastAPI's `Depends()` for client access in routes
 - **Async throughout** — AsyncQdrantClient, AsyncOpenAI, async context managers
@@ -91,6 +91,8 @@ Configured via `.env` file (loaded by Pydantic BaseSettings in `app/core/setting
 - `QDRANT_HOST` (default: `localhost`), `QDRANT_PORT` (default: `6333`), `QDRANT_GRPC_PORT` (default: `6334`), `QDRANT_API_KEY`, `QDRANT_PREFER_GRPC`, `QDRANT_CLOUD_INFERENCE`
 - `SCYLLA_HOSTS` (default: `localhost`), `SCYLLA_PORT` (default: `9042`), `SCYLLA_KEYSPACE` (default: `nexus`), `SCYLLA_USERNAME`, `SCYLLA_PASSWORD`
 - `NATS_URL` (default: `nats://localhost:4222`)
+- `ALLOYDB_HOST` (default: `localhost`), `ALLOYDB_PORT` (default: `5432`), `ALLOYDB_DATABASE` (default: `postgres`), `ALLOYDB_USER`, `ALLOYDB_PASSWORD`
+- `MAX_CONCURRENT_FILES` (default: `4`) — concurrency limit for file processing in worker
 - `APP_LOG_LEVEL` (default: `INFO`)
 - `PORT` (default: `8065`), `HOST` (default: `127.0.0.1`)
 
