@@ -44,7 +44,7 @@ class IngestionActivities:
         except Exception as e:
             logger.warning(f"Failed to publish NATS message to {subject}: {e}")
 
-    def _download_and_parse_sync(
+    async def _download_and_parse_sync(
         self, request: IngestionWorkflowRequest, file_payload: IngestionFilePayload
     ):
         """Download file to temp disk, parse to Document, then discard the file."""
@@ -58,7 +58,14 @@ class IngestionActivities:
                 file_path=tmp.name,
             )
 
-            return self._ingestion_service.process_file(ctx)
+            doc = await self._ingestion_service.process_file(ctx)
+
+            if file_payload.file_id is not None:
+                await self._repo.update_markdown_by_fileid(
+                    markdown=doc.text, file_id=file_payload.file_id
+                )
+
+            return doc
 
     @activity.defn(name=INGESTION_ACTIVITY.PARSE_AND_EMBED)
     async def parse_and_embed(
@@ -83,11 +90,20 @@ class IngestionActivities:
                 )
 
                 try:
-                    doc = await asyncio.to_thread(
-                        self._download_and_parse_sync, request, file_payload
+                    doc = await self._download_and_parse_sync(
+                        request=request, file_payload=file_payload
                     )
-                    await self._ingestion_service.embed_single_document(request, doc)
-                    del doc
+
+                    chunks = await self._ingestion_service.embed_single_document(
+                        request, doc, is_image=file_payload.is_image
+                    )
+
+                    if file_payload.file_id and chunks:
+                        await self._repo.insert_chunks(
+                            file_id=file_payload.file_id, chunks=chunks
+                        )
+
+                    del doc, chunks
                     gc.collect()
 
                     if file_payload.file_id:

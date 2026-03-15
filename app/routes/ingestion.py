@@ -71,6 +71,7 @@ async def ingest_data(
                     filename=file_data.filename,
                     object_name=object_name,
                     content_type=file_data.content_type,
+                    file_size=size,
                 )
             )
 
@@ -100,6 +101,18 @@ async def ingest_data(
                 object_name=payload.object_name,
                 content_type=payload.content_type,
             )
+
+            await repo.create_document(
+                file_id=file_id,
+                job_id=job_id,
+                project_id=request_data.project_id,
+                source=workflow_dto.source,
+                filename=payload.filename,
+                content_type=payload.content_type,
+                file_size=payload.file_size,
+                object_name=payload.object_name,
+            )
+
             payload.file_id = file_id
 
         # Phase 5: Start Temporal workflow
@@ -109,6 +122,7 @@ async def ingest_data(
             id=job_id,
             task_queue=WORKER_QUEUE.INGESTION,
         )
+
         return IngestionResponse(
             status="started",
             job_id=job_id,

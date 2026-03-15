@@ -42,11 +42,13 @@ async def lifespan(app_client: FastAPI):
 
     # Shutdown
     logger.info("Shutting down clients...")
+
     await close_nats()
     await close_alloydb()
     await close_temporal()
     await close_scylla()
     _minio_singleton.close()
+
     logger.info("All clients shut down.")
 
 

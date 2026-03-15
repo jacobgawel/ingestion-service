@@ -3,6 +3,7 @@ import asyncio
 from temporalio.worker import Worker
 
 from app.clients import (
+    get_alloydb_pool,
     get_minio_handler,
     get_mixedbread_client,
     get_nats_client,
@@ -11,11 +12,12 @@ from app.clients import (
     get_scylla_session,
     get_temporal_client,
 )
+from app.clients.alloydb_client import initialize_alloydb
 from app.clients.nats_client import initialize_nats
 from app.clients.scylla_client import initialize_scylla
 from app.clients.temporal_client import initialize_temporal
 from app.core.temporal import WORKER_QUEUE
-from app.database import ScyllaEngine
+from app.database import AlloyDBEngine, ScyllaEngine
 from app.repositories import IngestionRepository
 from app.service import IngestionService
 from app.temporal.activities import IngestionActivities
@@ -29,8 +31,12 @@ async def main():
     minio_handler.initialize()
 
     await initialize_scylla()
-    scylla_service = ScyllaEngine(session=get_scylla_session())
-    ingestion_repo = IngestionRepository(scylla=scylla_service)
+
+    await initialize_alloydb()
+
+    scylla_engine = ScyllaEngine(session=get_scylla_session())
+    alloydb_engine = AlloyDBEngine(pool=get_alloydb_pool())
+    ingestion_repo = IngestionRepository(scylla=scylla_engine, alloydb=alloydb_engine)
 
     await initialize_nats()
     nats_client = get_nats_client()

@@ -2,12 +2,14 @@
 
 import uuid as uuid_mod
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, List
 from uuid import UUID
 
 from app.core.enums import INGESTION_STATUS
 from app.core.logger import get_logger
-from app.database import ScyllaEngine
+from app.database import AlloyDBEngine, ScyllaEngine
+from app.models.ingestion import FileSummary
+from app.models.workflows import ChunkData
 
 logger = get_logger("IngestionRepository")
 
@@ -15,8 +17,9 @@ logger = get_logger("IngestionRepository")
 class IngestionRepository:
     """Data-access layer for ingestion_jobs and ingestion_files tables."""
 
-    def __init__(self, scylla: ScyllaEngine) -> None:
+    def __init__(self, scylla: ScyllaEngine, alloydb: AlloyDBEngine) -> None:
         self._scylla = scylla
+        self._alloydb = alloydb
 
     async def create_job(
         self,
@@ -161,18 +164,18 @@ class IngestionRepository:
             (job_id,),
         )
 
-    async def get_job_file_summaries(self, job_id: str) -> list[dict[str, str]]:
+    async def get_job_file_summaries(self, job_id: str) -> List[FileSummary]:
         """Get file_id, filename, and status for all files in a job."""
         rows = await self._scylla.execute_prepared(
             "SELECT file_id, filename, status FROM ingestion_files WHERE job_id = ?",
             (job_id,),
         )
         return [
-            {
-                "file_id": str(row["file_id"]),
-                "filename": row["filename"],
-                "status": row["status"],
-            }
+            FileSummary(
+                file_id=str(row["file_id"]),
+                filename=row["filename"],
+                status=row["status"],
+            )
             for row in rows
         ]
 
@@ -211,4 +214,64 @@ class IngestionRepository:
         )
         logger.info(
             f"Finalized job {job_id}: status={status}, completed={files_completed}, failed={files_failed}"
+        )
+
+    async def create_document(
+        self,
+        file_id: UUID,
+        job_id: str,
+        source: str | None,
+        project_id: str | None,
+        filename: str | None,
+        content_type: str | None,
+        file_size: int | None,
+        object_name: str,
+    ) -> UUID | None:
+        row = await self._alloydb.execute_one(
+            """
+            INSERT INTO public.documents
+                (file_id, job_id, source, project_id, filename, content_type, file_size, object_name)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING file_id;
+            """,
+            [
+                file_id,
+                job_id,
+                source,
+                project_id,
+                filename,
+                content_type,
+                file_size,
+                object_name,
+            ],
+        )
+
+        if row is None:
+            return None
+
+        file_id = row["file_id"]
+
+        return file_id
+
+    async def update_markdown_by_fileid(self, file_id: UUID, markdown: str) -> None:
+        await self._alloydb.execute_write(
+            """
+            UPDATE public.documents
+            SET markdown=$1
+            WHERE file_id = $2
+            """,
+            [markdown, file_id],
+        )
+
+    async def insert_chunks(self, file_id: UUID, chunks: list[ChunkData]) -> None:
+        """Insert document chunks with embeddings into AlloyDB."""
+        await self._alloydb.execute_many(
+            """
+            INSERT INTO public.document_chunks
+                (file_id, chunk_index, content, heading, embedding, token_count)
+            VALUES ($1, $2, $3, $4, $5::vector, $6)
+            """,
+            [
+                [file_id, i, c.content, c.heading, str(c.embedding), c.token_count]
+                for i, c in enumerate(chunks)
+            ],
         )
