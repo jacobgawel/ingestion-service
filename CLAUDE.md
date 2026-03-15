@@ -56,11 +56,12 @@ All configured in `.pre-commit-config.yaml`:
 ```
 app/
 ├── clients/       # Singleton client managers (Temporal, MinIO, Qdrant, OpenAI, Mixedbread, ScyllaDB, NATS, AlloyDB)
-├── core/          # Settings (Pydantic BaseSettings), enums, logger, dependencies, minio helpers, temporal constants
-├── models/        # Pydantic request/response models (api.py, workflows.py)
+├── core/          # Settings (Pydantic BaseSettings), enums, constants, logger, dependencies, temporal constants
+├── database/      # Database engines — ScyllaEngine (async CQL wrapper), AlloyDBEngine (asyncpg pool wrapper)
+├── models/        # Pydantic models — api.py (request/response), ingestion.py (FileEntity, FileSummary), workflows.py (workflow DTOs)
 ├── repositories/  # Data-access layer (domain-specific DB queries per feature)
 ├── routes/        # FastAPI routers (ingestion REST, jobs REST + WebSocket)
-├── service/       # Business logic (document processing, generic ScyllaDB query execution)
+├── service/       # Business logic (document processing, image captioning, embedding)
 ├── temporal/      # Workflow definitions and activities
 └── worker.py      # Temporal worker entrypoint
 main.py            # FastAPI app entrypoint
@@ -69,7 +70,7 @@ main.py            # FastAPI app entrypoint
 ## Architecture Patterns
 
 - **Singleton pattern** for all client managers. Eager initialization in `__init__`: OpenAI, Qdrant, Mixedbread. Async `initialize()` at startup: Temporal, ScyllaDB, NATS, AlloyDB. Synchronous `initialize()`: MinIO
-- **Repository pattern** for domain-specific DB queries (`app/repositories/`). Each feature gets its own repository file (e.g., `ingestion.py`). Repositories depend on `ScyllaService` for query execution.
+- **Repository pattern** for domain-specific DB queries (`app/repositories/`). Each feature gets its own repository file (e.g., `ingestion.py`). Repositories depend on `ScyllaEngine` and `AlloyDBEngine` for query execution.
 - **Dependency injection** via FastAPI's `Depends()` for client access in routes
 - **Async throughout** — AsyncQdrantClient, AsyncOpenAI, async context managers
 - **Temporal workflows** — 3-stage pipeline: Parse → Embed → Finalize, with retries (5 attempts, exponential backoff) and heartbeats
