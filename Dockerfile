@@ -24,8 +24,12 @@ COPY main.py .
 # Default host to 0.0.0.0 so the container is reachable
 ENV HOST=0.0.0.0
 ENV PORT=8065
+# SERVICE_MODE: "api" (default) or "worker"
+ENV SERVICE_MODE=api
 
 EXPOSE 8065
 
-# Default: run the API server
-CMD ["uv", "run", "./main.py"]
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
+
+ENTRYPOINT ["./entrypoint.sh"]
