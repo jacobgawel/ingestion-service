@@ -51,7 +51,7 @@ async def websocket_jobs(
             {
                 "type": "files_snapshot",
                 "job_id": job_id,
-                "files": files,
+                "files": [f.model_dump() for f in files],
             }
         )
 
