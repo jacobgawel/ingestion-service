@@ -15,9 +15,9 @@ from app.clients.nats_client import initialize_nats
 from app.clients.scylla_client import initialize_scylla
 from app.clients.temporal_client import initialize_temporal
 from app.core.temporal import WORKER_QUEUE
+from app.database import ScyllaEngine
 from app.repositories import IngestionRepository
 from app.service import IngestionService
-from app.service.scylla import ScyllaService
 from app.temporal.activities import IngestionActivities
 from app.temporal.workflows import IngestionWorkflow
 
@@ -29,7 +29,7 @@ async def main():
     minio_handler.initialize()
 
     await initialize_scylla()
-    scylla_service = ScyllaService(session=get_scylla_session())
+    scylla_service = ScyllaEngine(session=get_scylla_session())
     ingestion_repo = IngestionRepository(scylla=scylla_service)
 
     await initialize_nats()

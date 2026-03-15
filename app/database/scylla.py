@@ -8,16 +8,16 @@ from cassandra.query import PreparedStatement
 
 from app.core.logger import get_logger
 
-logger = get_logger("ScyllaService")
+logger = get_logger("ScyllaEngine")
 
 
-class ScyllaService:
+class ScyllaEngine:
     """Service layer for ScyllaDB query execution."""
 
     def __init__(self, session: Session) -> None:
         self.session: Session = session
         self._prepared_cache: dict[str, PreparedStatement] = {}
-        logger.info("ScyllaService initialized")
+        logger.info("ScyllaEngine initialized")
 
     def _prepare(self, query: str) -> PreparedStatement:
         """Get or create a prepared statement for the given query."""

@@ -7,7 +7,7 @@ from uuid import UUID
 
 from app.core.enums import INGESTION_STATUS
 from app.core.logger import get_logger
-from app.service.scylla import ScyllaService
+from app.database import ScyllaEngine
 
 logger = get_logger("IngestionRepository")
 
@@ -15,7 +15,7 @@ logger = get_logger("IngestionRepository")
 class IngestionRepository:
     """Data-access layer for ingestion_jobs and ingestion_files tables."""
 
-    def __init__(self, scylla: ScyllaService) -> None:
+    def __init__(self, scylla: ScyllaEngine) -> None:
         self._scylla = scylla
 
     async def create_job(
