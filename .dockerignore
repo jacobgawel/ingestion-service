@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+*.pyc
+.env
+.vscode
+.mypy_cache
+.ruff_cache
+demo/
+docs/
+*.md
+!pyproject.toml
