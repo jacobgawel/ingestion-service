@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Ingestion Service — a document ingestion and vector embedding pipeline built with FastAPI. It accepts file uploads, converts documents to Markdown via Docling, generates vector embeddings (OpenAI/Mixedbread), and stores them in Qdrant. Temporal orchestrates the async workflow pipeline.
+Ingestion Service — a document ingestion and vector embedding pipeline built with FastAPI. It accepts file uploads, converts documents to Markdown via Docling, generates vector embeddings (OpenAI/Mixedbread), and stores them in Qdrant. Images (standalone uploads or extracted from PDFs) are captioned via OpenAI's vision model (gpt-5-mini) with structured output and stored in MinIO. Temporal orchestrates the async workflow pipeline.
 
 ## Tech Stack
 
@@ -15,6 +15,7 @@ Ingestion Service — a document ingestion and vector embedding pipeline built w
 - **Object Storage:** MinIO (via boto3)
 - **Messaging:** NATS (via nats-py) — pub/sub for real-time job updates
 - **Embeddings:** OpenAI / Mixedbread
+- **Image Captioning:** OpenAI gpt-5-mini (vision model with structured output via beta `response.parse()` API)
 - **Document Parsing:** Docling
 - **Indexing/Splitting:** LlamaIndex (document splitting via `MarkdownNodeParser`, vector indexing, OpenAI embeddings)
 - **ML Runtime:** PyTorch (CUDA support, used for model inference)
@@ -58,7 +59,7 @@ app/
 ├── clients/       # Singleton client managers (Temporal, MinIO, Qdrant, OpenAI, Mixedbread, ScyllaDB, NATS, AlloyDB)
 ├── core/          # Settings (Pydantic BaseSettings), enums, constants, logger, dependencies, temporal constants
 ├── database/      # Database engines — ScyllaEngine (async CQL wrapper), AlloyDBEngine (asyncpg pool wrapper)
-├── models/        # Pydantic models — api.py (request/response), ingestion.py (FileEntity, FileSummary), workflows.py (workflow DTOs)
+├── models/        # Pydantic models — api.py (request/response), ingestion.py (FileEntity, FileSummary), workflows.py (workflow DTOs, ImageCaptionResponse)
 ├── repositories/  # Data-access layer (domain-specific DB queries per feature)
 ├── routes/        # FastAPI routers (ingestion REST, jobs REST + WebSocket)
 ├── service/       # Business logic (document processing, image captioning, embedding)
@@ -74,6 +75,7 @@ main.py            # FastAPI app entrypoint
 - **Dependency injection** via FastAPI's `Depends()` for client access in routes
 - **Async throughout** — AsyncQdrantClient, AsyncOpenAI, async context managers
 - **Temporal workflows** — 3-stage pipeline: Parse → Embed → Finalize, with retries (5 attempts, exponential backoff) and heartbeats
+- **Image pipeline** — Image files (png, jpg, jpeg, gif, webp, bmp, tiff, svg) bypass Docling parsing; instead they are base64-encoded and sent to OpenAI's vision model for structured captioning (`ImageCaptionResponse` with captions, objects, actions, scene, text, logos, people, colors, keywords, relationships). PDF image extraction uses `images_scale=2.0` and `generate_picture_images=True`; extracted images are uploaded to MinIO at `{object_path}/images/{image_name}.png` with markdown references updated in the document
 - **Job tracking** — ScyllaDB tables (`ingestion_jobs`, `ingestion_files`) persist job/file status; schema auto-created on startup. `ingestion_jobs` uses `PRIMARY KEY ((job_id), source)` where `source` is a non-null clustering key (user ID or `"api"` for programmatic usage). A materialized view `ingestion_jobs_by_source_project` (keyed on `(source, project_id)`) serves combined filters without `ALLOW FILTERING`. For `ingestion_jobs`, secondary indexes on `project_id` and `status` support single-column filters (`source` is a clustering key, not a secondary index). For `ingestion_files`, secondary indexes on `source`, `project_id`, and `status` support single-column filters
 - **Event-driven updates** — NATS pub/sub decouples Temporal activities from WebSocket handlers; activities publish to `jobs.{job_id}` subjects, WebSocket route subscribes and relays to clients. The WebSocket route queries the initial job state from the DB, then subscribes to NATS for live updates and relays them to clients (see `docs/websocket-job-updates.md`)
 - **Concurrency control** — asyncio Semaphore (max 4 concurrent file operations)
