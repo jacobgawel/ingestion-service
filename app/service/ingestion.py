@@ -3,8 +3,14 @@ import base64
 from io import BytesIO
 from pathlib import Path
 
-from docling.document_converter import DocumentConverter
-from docling_core.types.io import DocumentStream
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import (
+    DocumentConverter,
+    PdfFormatOption,
+    WordFormatOption,
+)
+from docling_core.types.doc.document import PictureItem
 from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import MarkdownNodeParser
 from llama_index.core.schema import TextNode
@@ -14,6 +20,7 @@ from mixedbread import AsyncMixedbread
 from openai import AsyncOpenAI
 from qdrant_client import AsyncQdrantClient
 
+from app.clients.minio_client import get_minio_handler
 from app.core.constants import IMAGE_MODEL, IMAGE_PROMPT
 from app.core.logger import get_logger
 from app.core.settings import config
@@ -37,14 +44,24 @@ class IngestionService:
         mixedbread_client: AsyncMixedbread,
     ):
         logger.info("Initializing IngestionService")
-        self.converter = DocumentConverter()
+
+        pipeline_options = PdfPipelineOptions()
+
+        pipeline_options.images_scale = 2.0
+        pipeline_options.generate_picture_images = True
+
+        self.converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+                InputFormat.DOCX: WordFormatOption(pipeline_options=pipeline_options),
+            }
+        )
         self.qdrant_client = qdrant_client
         self.openai_client = openai_client
         self.mixedbread_client = mixedbread_client
         Settings.embed_model = OpenAIEmbedding(
             model="text-embedding-3-small", api_key=config.OPENAI_KEY, dimensions=1536
         )
-        self.qdrant_client = qdrant_client
         self.vector_store = QdrantVectorStore(
             client=None,
             aclient=self.qdrant_client,
@@ -109,6 +126,7 @@ class IngestionService:
         logger.info(f"Parsing file: {ctx.file_name}")
 
         markdown_text = ""
+        minio = get_minio_handler()
 
         if ctx.is_image:
             if ctx.file_path:
@@ -122,22 +140,44 @@ class IngestionService:
                 markdown_text = await asyncio.to_thread(
                     Path(ctx.file_path).read_text, "utf-8"
                 )
-            elif ctx.file_stream is not None:
-                markdown_text = ctx.file_stream.read().decode("utf-8")
         else:
             if ctx.file_path:
                 conversion_result = await asyncio.to_thread(
                     self.converter.convert, Path(ctx.file_path)
                 )
                 markdown_text = conversion_result.document.export_to_markdown()
-            elif ctx.file_stream is not None:
-                doc_stream = DocumentStream(
-                    name=ctx.file_name, stream=BytesIO(ctx.file_stream.read())
-                )
-                conversion_result = await asyncio.to_thread(
-                    self.converter.convert, doc_stream
-                )
-                markdown_text = conversion_result.document.export_to_markdown()
+                picture_counter = 0
+                for element, _ in conversion_result.document.iterate_items():
+                    if isinstance(element, PictureItem):
+                        img = element.get_image(conversion_result.document)
+                        if img:
+                            picture_counter += 1
+                            image_name = f"{element.self_ref.split('/')[-1]}.png"
+                            image_path = f"{ctx.object_path}/images/{image_name}"
+
+                            # Upload image to MinIO
+                            image_buffer = BytesIO()
+                            img.save(image_buffer, "PNG")
+                            image_buffer.seek(0)
+                            await asyncio.to_thread(
+                                minio.upload_file,
+                                file_data=image_buffer,
+                                object_name=image_path,
+                            )
+
+                            # Replace the first placeholder with a reference to the image
+                            markdown_text = markdown_text.replace(
+                                "<!-- image -->",
+                                f"<!-- {image_name} -->",
+                                1,  # replace only the first occurrence each time
+                            )
+
+        if markdown_text:
+            await asyncio.to_thread(
+                minio.upload_file,
+                file_data=BytesIO(markdown_text.encode("utf-8")),
+                object_name=f"{ctx.object_path}/document.md",
+            )
 
         logger.info(f"Successfully parsed file: {ctx.file_name}")
 
@@ -145,6 +185,7 @@ class IngestionService:
 
     async def process_file(self, ctx: FileProcessingContext) -> Document:
         result = await self._parse_file(ctx)
+
         return Document(
             text=result,
             metadata={

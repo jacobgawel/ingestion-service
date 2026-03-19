@@ -1,4 +1,4 @@
-from typing import BinaryIO, List, Optional
+from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field
@@ -58,9 +58,10 @@ class ChunkData(BaseModel):
 class IngestionFilePayload(BaseModel):
     file_id: UUID | None = None
     filename: str | None
-    object_name: str  # The key in MinIO (e.g., "uuid-file.pdf")
+    object_url: str  # The key in MinIO (e.g., "uuid-file.pdf")
     content_type: str | None
     file_size: int
+    object_path: str  # Path to object in MinIO (e.g. {project_id}/asdasd)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -83,11 +84,12 @@ class FileProcessingContext(BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    file_stream: Optional[BinaryIO] = None
     file_name: str
     file_path: Optional[str] = None
     source: Optional[str] = None
     project_id: Optional[str] = None
+    object_path: str
+    object_url: str
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -111,15 +113,17 @@ class FileProcessingContext(BaseModel):
         cls,
         file_name: str,
         request: IngestionWorkflowRequest,
+        object_url: str,
+        object_path: str,
         file_path: Optional[str] = None,
-        file_stream: Optional[BinaryIO] = None,
     ) -> "FileProcessingContext":
         return cls(
-            file_stream=file_stream,
             file_name=file_name,
             file_path=file_path,
             source=request.source,
             project_id=request.project_id,
+            object_url=object_url,
+            object_path=object_path,
         )
 
 

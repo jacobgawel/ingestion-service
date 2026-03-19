@@ -33,7 +33,7 @@ async def main() -> None:
         texts = sys.argv[1:]
     else:
         texts = [
-            "Some random dog",
+            "safety helmet",
         ]
 
     print(f"Model: {MODEL} | Dimensions: {DIMENSIONS}")

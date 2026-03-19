@@ -15,20 +15,6 @@ repos:
       - id: mixed-line-ending
       - id: file-contents-sorter
 
-  # Python code formatting
-  - repo: https://github.com/psf/black
-    rev: 26.1.0
-    hooks:
-      - id: black
-        language_version: python3
-
-  # Import sorting
-  - repo: https://github.com/pycqa/isort
-    rev: 7.0.0
-    hooks:
-      - id: isort
-        args: ["--profile", "black"]
-
   # Linting and code quality
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.1

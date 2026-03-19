@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from pathlib import Path
 from typing import List
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -45,6 +46,9 @@ async def ingest_data(
     job_id = f"ingest-{uuid.uuid4()}"
     file_payloads: list[IngestionFilePayload] = []
 
+    if request_data.project_id is None:
+        request_data.project_id = str(uuid.uuid4())
+
     try:
         # Phase 1: Upload all files to MinIO
         for file_data in files:
@@ -53,25 +57,29 @@ async def ingest_data(
             file_data.file.seek(0)
 
             # 1. GENERATE UNIQUE OBJECT NAME
-            object_name = (
-                f"{request_data.project_id}/{uuid.uuid4()}-{file_data.filename}"
+            unique_prefix = uuid.uuid4()
+            file_name = file_data.filename
+
+            object_path = (
+                f"{request_data.project_id}/{unique_prefix}-{Path(file_name).stem}"  # type: ignore
             )
+            object_url = f"/{object_path}/{file_name}"
 
             # 2. UPLOAD TO MINIO
             await asyncio.to_thread(
                 minio.upload_file,
                 file_data=file_data.file,
-                size=size,
-                object_name=object_name,
+                object_name=object_url,
             )
 
             # 3. PREPARE PAYLOAD
             file_payloads.append(
                 IngestionFilePayload(
-                    filename=file_data.filename,
-                    object_name=object_name,
+                    filename=str(file_name),
+                    object_url=object_url,
                     content_type=file_data.content_type,
                     file_size=size,
+                    object_path=object_path,
                 )
             )
 
@@ -93,27 +101,27 @@ async def ingest_data(
         )
 
         for payload in file_payloads:
-            file_id = await repo.create_file(
+            unique_prefix = await repo.create_file(
                 job_id=job_id,
                 project_id=request_data.project_id,
                 source=workflow_dto.source,
                 filename=payload.filename,
-                object_name=payload.object_name,
+                object_name=payload.object_url,
                 content_type=payload.content_type,
             )
 
             await repo.create_document(
-                file_id=file_id,
+                file_id=unique_prefix,
                 job_id=job_id,
                 project_id=request_data.project_id,
                 source=workflow_dto.source,
                 filename=payload.filename,
                 content_type=payload.content_type,
                 file_size=payload.file_size,
-                object_name=payload.object_name,
+                object_name=payload.object_url,
             )
 
-            payload.file_id = file_id
+            payload.file_id = unique_prefix
 
         # Phase 5: Start Temporal workflow
         handle = await client.start_workflow(

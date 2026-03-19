@@ -54,7 +54,7 @@ class MinioManager:
             )
         return self._client
 
-    def upload_file(self, file_data, size: int, object_name: str):
+    def upload_file(self, file_data, object_name: str):
         """Uploads a stream to MinIO."""
         self.client.put_object(
             Bucket=self._bucket_name,

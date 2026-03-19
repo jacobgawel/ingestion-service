@@ -50,12 +50,14 @@ class IngestionActivities:
         """Download file to temp disk, parse to Document, then discard the file."""
         ext = os.path.splitext(file_payload.filename or "")[1]
         with tempfile.NamedTemporaryFile(suffix=ext, delete=True) as tmp:
-            self.minio_handler.download_file(file_payload.object_name, tmp.name)
+            self.minio_handler.download_file(file_payload.object_url, tmp.name)
 
             ctx = FileProcessingContext.from_request(
                 file_name=file_payload.filename or "default",
                 request=request,
                 file_path=tmp.name,
+                object_path=file_payload.object_path,
+                object_url=file_payload.object_url,
             )
 
             doc = await self._ingestion_service.process_file(ctx)
