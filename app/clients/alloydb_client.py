@@ -33,8 +33,50 @@ class AlloyDBManager:
                 user=config.ALLOYDB_USER,
                 password=config.ALLOYDB_PASSWORD,
             )
+
+            await self._create_schema()
+
             logger.info("AlloyDB client initialized successfully")
             self.__class__._initialized = True
+
+    async def _create_schema(self) -> None:
+        """Create extensions and tables if they don't exist."""
+        if self._pool is None:
+            raise RuntimeError("Cannot create schema: pool not initialized")
+
+        async with self._pool.acquire() as conn:
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS documents (
+                    file_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    job_id       TEXT NOT NULL,
+                    source       TEXT,
+                    project_id   TEXT,
+                    filename     TEXT NOT NULL,
+                    content_type TEXT,
+                    markdown     TEXT,
+                    page_count   INTEGER,
+                    file_size    BIGINT,
+                    created_at   TIMESTAMPTZ DEFAULT now(),
+                    object_name  TEXT NOT NULL
+                )
+            """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS document_chunks (
+                    chunk_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    file_id      UUID NOT NULL REFERENCES documents(file_id) ON DELETE CASCADE,
+                    chunk_index  INTEGER NOT NULL,
+                    content      TEXT NOT NULL,
+                    heading      TEXT,
+                    embedding    vector(1536),
+                    token_count  INTEGER,
+                    created_at   TIMESTAMPTZ DEFAULT now()
+                )
+            """)
+
+        logger.info("AlloyDB schema created (documents + document_chunks)")
 
     @property
     def pool(self) -> asyncpg.Pool:
