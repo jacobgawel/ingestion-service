@@ -59,8 +59,15 @@ class AlloyDBManager:
                     page_count   INTEGER,
                     file_size    BIGINT,
                     created_at   TIMESTAMPTZ DEFAULT now(),
-                    object_name  TEXT NOT NULL
+                    object_name  TEXT NOT NULL,
+                    hash         TEXT
                 )
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_documents_hash
+                ON documents (hash)
+                WHERE hash IS NOT NULL
             """)
 
             await conn.execute("""

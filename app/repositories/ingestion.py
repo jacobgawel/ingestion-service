@@ -216,6 +216,52 @@ class IngestionRepository:
             f"Finalized job {job_id}: status={status}, completed={files_completed}, failed={files_failed}"
         )
 
+    async def find_cached_document(self, file_hash: str) -> dict[str, Any] | None:
+        """Find an already-processed document with the same content hash.
+
+        Returns the file_id and markdown of a document that has been fully
+        processed (has markdown and at least one chunk), or None on cache miss.
+        """
+        return await self._alloydb.execute_one(
+            """
+            SELECT d.file_id, d.markdown
+            FROM public.documents d
+            WHERE d.hash = $1
+              AND d.markdown IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM public.document_chunks dc WHERE dc.file_id = d.file_id
+              )
+            LIMIT 1
+            """,
+            [file_hash],
+        )
+
+    async def get_chunks_by_file_id(self, file_id: UUID) -> list[ChunkData]:
+        """Retrieve all chunks (with embeddings) for a given document."""
+        rows = await self._alloydb.execute(
+            """
+            SELECT content, heading, embedding::text AS embedding, token_count
+            FROM public.document_chunks
+            WHERE file_id = $1
+            ORDER BY chunk_index
+            """,
+            [file_id],
+        )
+        chunks: list[ChunkData] = []
+        for row in rows:
+            # Parse the pgvector text representation "[0.1,0.2,...]" back to floats
+            embedding_str: str = row["embedding"]
+            embedding = [float(v) for v in embedding_str.strip("[]").split(",")]
+            chunks.append(
+                ChunkData(
+                    content=row["content"],
+                    heading=row["heading"],
+                    embedding=embedding,
+                    token_count=row["token_count"],
+                )
+            )
+        return chunks
+
     async def create_document(
         self,
         file_id: UUID,
@@ -226,12 +272,13 @@ class IngestionRepository:
         content_type: str | None,
         file_size: int | None,
         object_name: str,
+        file_hash: str,
     ) -> UUID | None:
         row = await self._alloydb.execute_one(
             """
             INSERT INTO public.documents
-                (file_id, job_id, source, project_id, filename, content_type, file_size, object_name)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING file_id;
+                (file_id, job_id, source, project_id, filename, content_type, file_size, object_name, hash)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING file_id;
             """,
             [
                 file_id,
@@ -242,6 +289,7 @@ class IngestionRepository:
                 content_type,
                 file_size,
                 object_name,
+                file_hash,
             ],
         )
 

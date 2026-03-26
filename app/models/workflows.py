@@ -62,6 +62,7 @@ class IngestionFilePayload(BaseModel):
     content_type: str | None
     file_size: int
     object_path: str  # Path to object in MinIO (e.g. {project_id}/asdasd)
+    file_hash: str
 
     @computed_field  # type: ignore[prop-decorator]
     @property

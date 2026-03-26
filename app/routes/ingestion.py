@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import io
 import uuid
 from pathlib import Path
 from typing import List
@@ -52,9 +54,9 @@ async def ingest_data(
     try:
         # Phase 1: Upload all files to MinIO
         for file_data in files:
-            file_data.file.seek(0, 2)
-            size = file_data.file.tell()
-            file_data.file.seek(0)
+            file_bytes = await file_data.read()
+            size = len(file_bytes)
+            file_hash = hashlib.sha256(file_bytes).hexdigest()
 
             # 1. GENERATE UNIQUE OBJECT NAME
             unique_prefix = uuid.uuid4()
@@ -68,7 +70,7 @@ async def ingest_data(
             # 2. UPLOAD TO MINIO
             await asyncio.to_thread(
                 minio.upload_file,
-                file_data=file_data.file,
+                file_data=io.BytesIO(file_bytes),
                 object_name=object_url,
             )
 
@@ -80,6 +82,7 @@ async def ingest_data(
                     content_type=file_data.content_type,
                     file_size=size,
                     object_path=object_path,
+                    file_hash=file_hash,
                 )
             )
 
@@ -119,6 +122,7 @@ async def ingest_data(
                 content_type=payload.content_type,
                 file_size=payload.file_size,
                 object_name=payload.object_url,
+                file_hash=payload.file_hash,
             )
 
             payload.file_id = unique_prefix

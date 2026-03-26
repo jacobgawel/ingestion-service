@@ -196,6 +196,45 @@ class IngestionService:
             },
         )
 
+    async def reindex_cached_chunks(
+        self,
+        request: IngestionWorkflowRequest,
+        chunks: list[ChunkData],
+    ) -> None:
+        """Insert pre-embedded chunks into Qdrant with new project metadata.
+
+        Used during cache-hit deduplication: the embeddings already exist from
+        a prior processing run, so we skip parsing and embedding and just
+        insert the vectors into Qdrant under the new project's metadata.
+        """
+        nodes: list[TextNode] = []
+        for chunk in chunks:
+            node = TextNode(
+                text=chunk.content,
+                metadata={
+                    "source": request.source,
+                    "project_id": request.project_id,
+                },
+                embedding=chunk.embedding,
+            )
+            if chunk.heading:
+                node.metadata["header_1"] = chunk.heading
+            nodes.append(node)
+
+        storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
+
+        VectorStoreIndex(
+            nodes=nodes,
+            storage_context=storage_context,
+            show_progress=False,
+            use_async=True,
+            insert_batch_size=128,
+        )
+
+        logger.info(
+            f"Reindexed {len(chunks)} cached chunks for project {request.project_id}"
+        )
+
     async def embed_single_document(
         self,
         request: IngestionWorkflowRequest,

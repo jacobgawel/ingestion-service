@@ -92,21 +92,64 @@ class IngestionActivities:
                 )
 
                 try:
-                    doc = await self._download_and_parse_sync(
-                        request=request, file_payload=file_payload
-                    )
+                    # --- Deduplication: check for cached processing results ---
+                    cached_hit = False
+                    if file_payload.file_hash and file_payload.file_id:
+                        cached = await self._repo.find_cached_document(
+                            file_payload.file_hash
+                        )
+                        if cached:
+                            source_file_id = cached["file_id"]
+                            cached_markdown = cached["markdown"]
+                            cached_chunks = await self._repo.get_chunks_by_file_id(
+                                source_file_id
+                            )
 
-                    chunks = await self._ingestion_service.embed_single_document(
-                        request, doc, is_image=file_payload.is_image
-                    )
+                            if cached_chunks:
+                                logger.info(
+                                    f"Cache hit for {file_payload.filename} "
+                                    f"(hash={file_payload.file_hash[:12]}…, "
+                                    f"source_doc={source_file_id})"
+                                )
 
-                    if file_payload.file_id and chunks:
-                        await self._repo.insert_chunks(
-                            file_id=file_payload.file_id, chunks=chunks
+                                # Copy markdown to the new document
+                                await self._repo.update_markdown_by_fileid(
+                                    markdown=cached_markdown,
+                                    file_id=file_payload.file_id,
+                                )
+
+                                # Insert cached chunks into AlloyDB for the new doc
+                                await self._repo.insert_chunks(
+                                    file_id=file_payload.file_id,
+                                    chunks=cached_chunks,
+                                )
+
+                                # Reindex into Qdrant with new project metadata
+                                await self._ingestion_service.reindex_cached_chunks(
+                                    request, cached_chunks
+                                )
+
+                                del cached_chunks
+                                gc.collect()
+                                cached_hit = True
+
+                    # --- Normal processing path (cache miss) ---
+                    if not cached_hit:
+                        doc = await self._download_and_parse_sync(
+                            request=request, file_payload=file_payload
                         )
 
-                    del doc, chunks
-                    gc.collect()
+                        chunks = await self._ingestion_service.embed_single_document(
+                            request, doc, is_image=file_payload.is_image
+                        )
+
+                        if file_payload.file_id and chunks:
+                            await self._repo.insert_chunks(
+                                file_id=file_payload.file_id, chunks=chunks
+                            )
+
+                        del doc, chunks
+                        gc.collect()
 
                     if file_payload.file_id:
                         await self._repo.update_file_status(
