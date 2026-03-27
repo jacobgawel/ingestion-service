@@ -1,6 +1,6 @@
 """Base class for singleton client managers with a unified async lifecycle."""
 
-from typing import Generic, TypeVar
+from typing import Any, Generic, Self, TypeVar, cast
 
 T = TypeVar("T")
 
@@ -12,14 +12,14 @@ class ClientManager(Generic[T]):
     resource needs explicit teardown, ``_close_client``.
     """
 
-    _instance: "ClientManager[T] | None" = None
+    _instance: Any = None
     _client: T | None = None
     _initialized: bool = False
 
-    def __new__(cls) -> "ClientManager[T]":
+    def __new__(cls) -> Self:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-        return cls._instance
+        return cast(Self, cls._instance)
 
     @property
     def name(self) -> str:
