@@ -1,51 +1,102 @@
 """AlloyDB client singleton instance."""
 
-from typing import Optional
-
 import asyncpg
 
+from app.clients.base import ClientManager
 from app.core.logger import get_logger
 from app.core.settings import config
 
 logger = get_logger("AlloyDBManager")
 
 
-class AlloyDBManager:
-    """Singleton class for AlloyDB client to ensure single instance across the application."""
+class AlloyDBManager(ClientManager[asyncpg.Pool]):
+    """Singleton manager for the AlloyDB connection pool."""
 
-    _instance: Optional["AlloyDBManager"] = None
-    _pool: Optional[asyncpg.Pool] = None
-    _initialized: bool = False
+    async def _create_client(self) -> asyncpg.Pool:
+        pool = await asyncpg.create_pool(
+            host=config.ALLOYDB_HOST,
+            port=config.ALLOYDB_PORT,
+            database=config.ALLOYDB_DATABASE,
+            user=config.ALLOYDB_USER,
+            password=config.ALLOYDB_PASSWORD,
+        )
+        await self._create_schema(pool)
+        logger.info("AlloyDB client initialized successfully")
+        return pool
 
-    def __new__(cls) -> "AlloyDBManager":
-        """Ensure only one instance is created."""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    async def initialize(self) -> None:
-        """Initialize the AlloyDB connection pool. Must be called during app startup."""
-        if not self.__class__._initialized:
-            self._pool = await asyncpg.create_pool(
-                host=config.ALLOYDB_HOST,
-                port=config.ALLOYDB_PORT,
-                database=config.ALLOYDB_DATABASE,
-                user=config.ALLOYDB_USER,
-                password=config.ALLOYDB_PASSWORD,
-            )
-
-            await self._create_schema()
-
-            logger.info("AlloyDB client initialized successfully")
-            self.__class__._initialized = True
-
-    async def _create_schema(self) -> None:
-        """Create extensions and tables if they don't exist."""
-        if self._pool is None:
-            raise RuntimeError("Cannot create schema: pool not initialized")
-
-        async with self._pool.acquire() as conn:
+    async def _create_schema(self, pool: asyncpg.Pool) -> None:
+        async with pool.acquire() as conn:
             await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+            # -- Job tracking --
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ingestion_jobs (
+                    job_id          TEXT PRIMARY KEY,
+                    source          TEXT NOT NULL,
+                    project_id      TEXT,
+                    status          TEXT NOT NULL,
+                    total_files     INTEGER NOT NULL DEFAULT 0,
+                    files_completed INTEGER NOT NULL DEFAULT 0,
+                    files_failed    INTEGER NOT NULL DEFAULT 0,
+                    created_at      TIMESTAMPTZ DEFAULT now(),
+                    updated_at      TIMESTAMPTZ DEFAULT now(),
+                    error_message   TEXT
+                )
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_source
+                ON ingestion_jobs (source)
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_project_id
+                ON ingestion_jobs (project_id)
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_status
+                ON ingestion_jobs (status)
+            """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ingestion_files (
+                    file_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    job_id        TEXT NOT NULL REFERENCES ingestion_jobs(job_id) ON DELETE CASCADE,
+                    project_id    TEXT,
+                    source        TEXT,
+                    filename      TEXT,
+                    object_name   TEXT NOT NULL,
+                    content_type  TEXT,
+                    status        TEXT NOT NULL,
+                    created_at    TIMESTAMPTZ DEFAULT now(),
+                    updated_at    TIMESTAMPTZ DEFAULT now(),
+                    error_message TEXT
+                )
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ingestion_files_job_id
+                ON ingestion_files (job_id)
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ingestion_files_source
+                ON ingestion_files (source)
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ingestion_files_project_id
+                ON ingestion_files (project_id)
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ingestion_files_status
+                ON ingestion_files (status)
+            """)
+
+            # -- Document storage --
 
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS documents (
@@ -83,46 +134,19 @@ class AlloyDBManager:
                 )
             """)
 
-        logger.info("AlloyDB schema created (documents + document_chunks)")
+        logger.info("AlloyDB schema created")
+
+    async def _close_client(self) -> None:
+        await self.client.close()
+        logger.info("AlloyDB client shut down")
 
     @property
     def pool(self) -> asyncpg.Pool:
-        """Get the AlloyDB connection pool."""
-        if self._pool is None:
-            raise RuntimeError(
-                "AlloyDB client not initialized. Call 'await alloydb_manager.initialize()' first."
-            )
-        return self._pool
-
-    async def close(self) -> None:
-        """Close the AlloyDB connection pool."""
-        if self._pool:
-            await self._pool.close()
-            logger.info("AlloyDB client shut down")
-            self.__class__._initialized = False
-            self.__class__._instance = None
-            self._pool = None
+        return self.client
 
 
-# Create a singleton instance
 _alloydb_singleton = AlloyDBManager()
 
 
-async def initialize_alloydb() -> None:
-    """Initialize the AlloyDB singleton client."""
-    await _alloydb_singleton.initialize()
-
-
-async def close_alloydb() -> None:
-    """Close the AlloyDB singleton client."""
-    await _alloydb_singleton.close()
-
-
 def get_alloydb_pool() -> asyncpg.Pool:
-    """
-    Get the singleton AlloyDB connection pool.
-
-    Returns:
-        asyncpg.Pool: The singleton AlloyDB connection pool.
-    """
     return _alloydb_singleton.pool

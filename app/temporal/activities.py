@@ -124,7 +124,6 @@ class IngestionActivities:
                                     chunks=cached_chunks,
                                 )
 
-                                # Reindex into Qdrant with new project metadata
                                 await self._ingestion_service.reindex_cached_chunks(
                                     request, cached_chunks
                                 )
@@ -208,7 +207,7 @@ class IngestionActivities:
         error_message: str | None,
     ) -> None:
         """
-        Activity: Finalize the job status in ScyllaDB.
+        Activity: Finalize the job status.
         """
         await self._repo.finalize_job(
             job_id=job_id,

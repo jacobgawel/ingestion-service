@@ -129,7 +129,7 @@ class FileProcessingContext(BaseModel):
 
 
 class IngestionWorkflowDTO(BaseModel):
-    job_id: str = Field(..., description="ScyllaDB job ID for status tracking")
+    job_id: str = Field(..., description="Job ID for status tracking")
     request: IngestionWorkflowRequest = Field(
         ..., description="The request object that's being passed into ingest"
     )

@@ -37,10 +37,13 @@ async def websocket_jobs(
             return
 
         # Subscribe FIRST to avoid missing updates between DB read and subscribe
-        queue: asyncio.Queue[bytes] = asyncio.Queue()
+        queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=128)
 
         async def _on_message(msg) -> None:
-            await queue.put(msg.data)
+            try:
+                queue.put_nowait(msg.data)
+            except asyncio.QueueFull:
+                logger.warning(f"Queue full for job {job_id}, dropping message")
 
         sub = await nats_client.subscribe(f"jobs.{job_id}", cb=_on_message)
 
@@ -51,7 +54,7 @@ async def websocket_jobs(
             {
                 "type": "files_snapshot",
                 "job_id": job_id,
-                "files": [f.model_dump() for f in files],
+                "files": [f.model_dump(mode="json") for f in files],
             }
         )
 

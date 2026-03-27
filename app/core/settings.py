@@ -18,47 +18,13 @@ class Settings(BaseSettings):
         default=LOG_LEVEL.INFO, description="Log level for the application"
     )
 
-    # Qdrant configuration
-    QDRANT_HOST: str = Field(default="localhost", description="Qdrant server host")
-    QDRANT_PORT: int = Field(default=6333, description="Qdrant server port")
-    QDRANT_GRPC_PORT: int = Field(default=6334, description="Qdrant gRPC port")
-    QDRANT_API_KEY: str | None = Field(
-        default=None, description="Qdrant API key (optional)"
-    )
-    QDRANT_PREFER_GRPC: bool = Field(
-        default=False, description="Prefer gRPC over REST API"
-    )
-    QDRANT_CLOUD_INFERENCE: bool = Field(
-        default=False, description="Enable Qdrants cloud inference"
-    )
-
     # OpenAI
     OPENAI_KEY: str = Field(
         ..., description="OpenAI API key for embeddings and chat completions"
     )
-    MIXEDBREAD_KEY: str = Field(..., description="Mixedbread API key for embeddings")
-
     # Temporal
     TEMPORAL_HOST: str = Field(
         default="localhost:7233", description="Temporal server host"
-    )
-
-    # ScyllaDB
-    SCYLLA_HOSTS: str = Field(
-        default="localhost",
-        description="Comma-separated ScyllaDB contact points",
-    )
-    SCYLLA_PORT: int = Field(
-        default=9042, description="ScyllaDB CQL native transport port"
-    )
-    SCYLLA_KEYSPACE: str = Field(
-        default="nexus", description="Default ScyllaDB keyspace"
-    )
-    SCYLLA_USERNAME: str | None = Field(
-        default=None, description="ScyllaDB authentication username"
-    )
-    SCYLLA_PASSWORD: str | None = Field(
-        default=None, description="ScyllaDB authentication password"
     )
 
     # NATS
@@ -82,6 +48,15 @@ class Settings(BaseSettings):
     # Worker
     MAX_CONCURRENT_FILES: int = Field(
         default=4, description="Max concurrent file processing in worker"
+    )
+
+    # Embedding
+    EMBEDDING_DIMENTIONS: int = Field(
+        default=1526, description="Embedding model dimensions"
+    )
+    EMBEDDING_MODEL: str = Field(
+        default="text-embedding-3-small",
+        description="Model utilised for embedding",
     )
 
     # Minio

@@ -95,7 +95,7 @@ async def ingest_data(
             files=file_payloads,
         )
 
-        # Phase 4: Create ScyllaDB records
+        # Phase 4: Create DB records
         await repo.create_job(
             job_id=job_id,
             source=workflow_dto.source,

@@ -5,19 +5,13 @@ from temporalio.worker import Worker
 from app.clients import (
     get_alloydb_pool,
     get_minio_handler,
-    get_mixedbread_client,
     get_nats_client,
     get_openai_client,
-    get_qdrant_client,
-    get_scylla_session,
     get_temporal_client,
+    initialize_all,
 )
-from app.clients.alloydb_client import initialize_alloydb
-from app.clients.nats_client import initialize_nats
-from app.clients.scylla_client import initialize_scylla
-from app.clients.temporal_client import initialize_temporal
 from app.core.temporal import WORKER_QUEUE
-from app.database import AlloyDBEngine, ScyllaEngine
+from app.database import AlloyDBEngine
 from app.repositories import IngestionRepository
 from app.service import IngestionService
 from app.temporal.activities import IngestionActivities
@@ -25,35 +19,20 @@ from app.temporal.workflows import IngestionWorkflow
 
 
 async def main():
-    await initialize_temporal()
+    await initialize_all()
 
-    minio_handler = get_minio_handler()
-    minio_handler.initialize()
-
-    await initialize_scylla()
-
-    await initialize_alloydb()
-
-    scylla_engine = ScyllaEngine(session=get_scylla_session())
     alloydb_engine = AlloyDBEngine(pool=get_alloydb_pool())
-    ingestion_repo = IngestionRepository(scylla=scylla_engine, alloydb=alloydb_engine)
-
-    await initialize_nats()
-    nats_client = get_nats_client()
-
-    client = get_temporal_client()
+    ingestion_repo = IngestionRepository(alloydb=alloydb_engine)
 
     ingestion_service = IngestionService(
-        qdrant_client=get_qdrant_client(),
         openai_client=get_openai_client(),
-        mixedbread_client=get_mixedbread_client(),
     )
     activities = IngestionActivities(
-        ingestion_service, minio_handler, ingestion_repo, nats_client
+        ingestion_service, get_minio_handler(), ingestion_repo, get_nats_client()
     )
 
     worker = Worker(
-        client,
+        get_temporal_client(),
         task_queue=WORKER_QUEUE.INGESTION,
         workflows=[IngestionWorkflow],
         activities=[
@@ -62,7 +41,7 @@ async def main():
         ],
     )
 
-    print("🚀 Worker started!")
+    print("Worker started!")
 
     await worker.run()
 

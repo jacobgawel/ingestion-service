@@ -1,61 +1,36 @@
 """MinIO client singleton instance."""
 
-from typing import Optional
+from typing import Any
 
 import boto3
 
+from app.clients.base import ClientManager
 from app.core.settings import config
 
 
-class MinioManager:
-    """Singleton class for MinIO client to ensure single instance across the application."""
+class MinioManager(ClientManager[Any]):
+    """Singleton manager for the MinIO (S3) client."""
 
-    _instance: Optional["MinioManager"] = None
-    _client = None
-    _initialized: bool = False
     _bucket_name: str = "ingestion-bucket"
 
-    def __new__(cls) -> "MinioManager":
-        """Ensure only one instance is created."""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def initialize(self) -> None:
-        """Initialize the MinIO client. Must be called before accessing the client."""
-        if not self.__class__._initialized:
-            self._client = self._create_client()
-            self._ensure_bucket()
-            self.__class__._initialized = True
-
-    def _create_client(self):
-        """Create and configure the MinIO (S3) client."""
-        return boto3.client(
+    async def _create_client(self) -> Any:
+        client = boto3.client(
             "s3",
             endpoint_url=config.MINIO_HOST,
             aws_access_key_id=config.MINIO_ACCESS_KEY,
             aws_secret_access_key=config.MINIO_SECRET_KEY,
             region_name="us-east-1",
         )
+        self._ensure_bucket(client)
+        return client
 
-    def _ensure_bucket(self):
-        """Make sure the bucket exists on startup."""
+    def _ensure_bucket(self, client: Any) -> None:
         try:
-            self.client.head_bucket(Bucket=self._bucket_name)
-        except self.client.exceptions.NoSuchBucket:
-            self.client.create_bucket(Bucket=self._bucket_name)
+            client.head_bucket(Bucket=self._bucket_name)
+        except client.exceptions.NoSuchBucket:
+            client.create_bucket(Bucket=self._bucket_name)
 
-    @property
-    def client(self):
-        """Get the MinIO client instance."""
-        if self._client is None:
-            raise RuntimeError(
-                "MinIO client not initialized. Call 'minio_manager.initialize()' first."
-            )
-        return self._client
-
-    def upload_file(self, file_data, object_name: str):
-        """Uploads a stream to MinIO."""
+    def upload_file(self, file_data: Any, object_name: str) -> str:
         self.client.put_object(
             Bucket=self._bucket_name,
             Key=object_name,
@@ -64,33 +39,17 @@ class MinioManager:
         )
         return object_name
 
-    def download_file(self, object_name: str, file_path: str):
-        """Downloads file from MinIO to local disk (for processing)."""
+    def download_file(self, object_name: str, file_path: str) -> None:
         self.client.download_file(
             Bucket=self._bucket_name, Key=object_name, Filename=file_path
         )
 
-    def delete_file(self, object_name: str):
-        """Cleanup after processing."""
+    def delete_file(self, object_name: str) -> None:
         self.client.delete_object(Bucket=self._bucket_name, Key=object_name)
 
-    def close(self) -> None:
-        """Clean up the MinIO client."""
-        if self._client:
-            self.__class__._initialized = False
-            self.__class__._instance = None
-            self._client = None
 
-
-# Create a singleton instance
 _minio_singleton = MinioManager()
 
 
-def get_minio_handler() -> "MinioManager":
-    """
-    Get the singleton MinIO handler instance.
-
-    Returns:
-        MinioManager: The singleton MinIO handler instance.
-    """
+def get_minio_handler() -> MinioManager:
     return _minio_singleton

@@ -3,6 +3,7 @@ import base64
 from io import BytesIO
 from pathlib import Path
 
+import tiktoken
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import (
@@ -11,14 +12,11 @@ from docling.document_converter import (
     WordFormatOption,
 )
 from docling_core.types.doc.document import PictureItem
-from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
+from llama_index.core import Document, Settings
 from llama_index.core.node_parser import MarkdownNodeParser
 from llama_index.core.schema import TextNode
 from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.vector_stores.qdrant import QdrantVectorStore
-from mixedbread import AsyncMixedbread
 from openai import AsyncOpenAI
-from qdrant_client import AsyncQdrantClient
 
 from app.clients.minio_client import get_minio_handler
 from app.core.constants import IMAGE_MODEL, IMAGE_PROMPT
@@ -39,9 +37,7 @@ class IngestionService:
 
     def __init__(
         self,
-        qdrant_client: AsyncQdrantClient,
         openai_client: AsyncOpenAI,
-        mixedbread_client: AsyncMixedbread,
     ):
         logger.info("Initializing IngestionService")
 
@@ -56,17 +52,13 @@ class IngestionService:
                 InputFormat.DOCX: WordFormatOption(pipeline_options=pipeline_options),
             }
         )
-        self.qdrant_client = qdrant_client
         self.openai_client = openai_client
-        self.mixedbread_client = mixedbread_client
         Settings.embed_model = OpenAIEmbedding(
-            model="text-embedding-3-small", api_key=config.OPENAI_KEY, dimensions=1536
+            model=config.EMBEDDING_MODEL,
+            api_key=config.OPENAI_KEY,
+            dimensions=config.EMBEDDING_DIMENTIONS,
         )
-        self.vector_store = QdrantVectorStore(
-            client=None,
-            aclient=self.qdrant_client,
-            collection_name="nexus_knowledge_base",
-        )
+        self.tokenizer = tiktoken.encoding_for_model(config.EMBEDDING_MODEL)
         logger.info("IngestionService initialized successfully")
 
     async def _caption_image(self, file_path: str) -> str:
@@ -201,36 +193,12 @@ class IngestionService:
         request: IngestionWorkflowRequest,
         chunks: list[ChunkData],
     ) -> None:
-        """Insert pre-embedded chunks into Qdrant with new project metadata.
+        """Handle cached chunks for deduplication.
 
         Used during cache-hit deduplication: the embeddings already exist from
-        a prior processing run, so we skip parsing and embedding and just
-        insert the vectors into Qdrant under the new project's metadata.
+        a prior processing run, so we skip parsing and embedding. The caller
+        handles persisting chunks to AlloyDB.
         """
-        nodes: list[TextNode] = []
-        for chunk in chunks:
-            node = TextNode(
-                text=chunk.content,
-                metadata={
-                    "source": request.source,
-                    "project_id": request.project_id,
-                },
-                embedding=chunk.embedding,
-            )
-            if chunk.heading:
-                node.metadata["header_1"] = chunk.heading
-            nodes.append(node)
-
-        storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
-
-        VectorStoreIndex(
-            nodes=nodes,
-            storage_context=storage_context,
-            show_progress=False,
-            use_async=True,
-            insert_batch_size=128,
-        )
-
         logger.info(
             f"Reindexed {len(chunks)} cached chunks for project {request.project_id}"
         )
@@ -262,23 +230,11 @@ class IngestionService:
             node.metadata["source"] = request.source
             node.metadata["project_id"] = request.project_id
 
-        storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
-
-        VectorStoreIndex(
-            nodes=nodes,
-            storage_context=storage_context,
-            show_progress=False,
-            use_async=True,
-            insert_batch_size=128,
-        )
-
         chunks: list[ChunkData] = []
 
         for node in nodes:
             text = node.get_content()
-            embedding = node.embedding
-            if not embedding:
-                embedding = await Settings.embed_model.aget_text_embedding(text)
+            embedding = await Settings.embed_model.aget_text_embedding(text)
 
             chunks.append(
                 ChunkData(
@@ -286,7 +242,7 @@ class IngestionService:
                     heading=node.metadata.get("header_1")
                     or node.metadata.get("Header_1"),
                     embedding=embedding,
-                    token_count=len(text.split()),
+                    token_count=len(self.tokenizer.encode(text)),
                 )
             )
 

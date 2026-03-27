@@ -1,26 +1,4 @@
 services:
-  qdrant:
-    image: qdrant/qdrant:gpu-nvidia-latest
-    container_name: nexus-qdrant
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_storage:/qdrant/storage
-    environment:
-      - QDRANT__SERVICE__GRPC_PORT=6334
-      - QDRANT__GPU__INDEXING=1
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    restart: unless-stopped
-    networks:
-      - nexus-network
-
   minio:
     image: minio/minio:latest
     restart: ${RESTART_POLICY:-unless-stopped}
@@ -47,25 +25,6 @@ services:
     container_name: nexus-nats
     ports:
       - "4222:4222"
-    restart: unless-stopped
-    networks:
-      - nexus-network
-
-  scylladb:
-    image: scylladb/scylla:latest
-    container_name: nexus-scylladb
-    ports:
-      - "9042:9042"
-      - "9160:9160"
-    volumes:
-      - scylla_data:/var/lib/scylla
-    command: --smp 1 --memory 750M --overprovisioned 1 --broadcast-rpc-address 127.0.0.1
-    healthcheck:
-      test: ["CMD-SHELL", "cqlsh -e 'SELECT now() FROM system.local'"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
     restart: unless-stopped
     networks:
       - nexus-network
@@ -131,11 +90,7 @@ services:
 #       - nexus-network
 
 volumes:
-  qdrant_storage:
-    driver: local
   minio:
-    driver: local
-  scylla_data:
     driver: local
   alloydb_data:
     driver: local

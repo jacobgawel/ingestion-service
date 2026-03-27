@@ -6,11 +6,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.clients.alloydb_client import close_alloydb, initialize_alloydb
-from app.clients.minio_client import _minio_singleton
-from app.clients.nats_client import close_nats, initialize_nats
-from app.clients.scylla_client import close_scylla, initialize_scylla
-from app.clients.temporal_client import close_temporal, initialize_temporal
+from app.clients import close_all, initialize_all
 from app.core.logger import configure_uvicorn_logging, get_logger
 from app.core.settings import config
 from app.routes import ingestion, jobs, jobs_ws
@@ -21,34 +17,14 @@ logger = get_logger("Lifespan")
 @asynccontextmanager
 async def lifespan(app_client: FastAPI):
     # Startup
-    logger.info("Initializing Temporal client...")
-    await initialize_temporal()
-
-    logger.info("Initializing MinIO client...")
-    _minio_singleton.initialize()
-
-    logger.info("Initializing ScyllaDB client...")
-    await initialize_scylla()
-
-    logger.info("Initializing AlloyDB client...")
-    await initialize_alloydb()
-
-    logger.info("Initializing NATS client...")
-    await initialize_nats()
-
+    await initialize_all()
     logger.info("All clients initialized.")
 
     yield
 
     # Shutdown
     logger.info("Shutting down clients...")
-
-    await close_nats()
-    await close_alloydb()
-    await close_temporal()
-    await close_scylla()
-    _minio_singleton.close()
-
+    await close_all()
     logger.info("All clients shut down.")
 
 
