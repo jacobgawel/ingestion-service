@@ -88,36 +88,32 @@ async def ingest_data(
 
         logger.info(f"Finished uploading: {len(files)} files")
 
-        # Phase 3: Build workflow DTO
-        workflow_dto = IngestionWorkflowDTO(
-            job_id=job_id,
-            request=IngestionWorkflowRequest(**request_data.model_dump()),
-            files=file_payloads,
-        )
+        # Phase 3: Create DB records (must happen before building workflow DTO
+        # so that file_id values are set on each payload before Pydantic copies them)
+        source = request_data.source or "api"
 
-        # Phase 4: Create DB records
         await repo.create_job(
             job_id=job_id,
-            source=workflow_dto.source,
+            source=source,
             project_id=request_data.project_id,
             total_files=len(file_payloads),
         )
 
         for payload in file_payloads:
-            unique_prefix = await repo.create_file(
+            file_id = await repo.create_file(
                 job_id=job_id,
                 project_id=request_data.project_id,
-                source=workflow_dto.source,
+                source=source,
                 filename=payload.filename,
                 object_name=payload.object_url,
                 content_type=payload.content_type,
             )
 
             await repo.create_document(
-                file_id=unique_prefix,
+                file_id=file_id,
                 job_id=job_id,
                 project_id=request_data.project_id,
-                source=workflow_dto.source,
+                source=source,
                 filename=payload.filename,
                 content_type=payload.content_type,
                 file_size=payload.file_size,
@@ -125,7 +121,14 @@ async def ingest_data(
                 file_hash=payload.file_hash,
             )
 
-            payload.file_id = unique_prefix
+            payload.file_id = file_id
+
+        # Phase 4: Build workflow DTO (after file_ids are populated)
+        workflow_dto = IngestionWorkflowDTO(
+            job_id=job_id,
+            request=IngestionWorkflowRequest(**request_data.model_dump()),
+            files=file_payloads,
+        )
 
         # Phase 5: Start Temporal workflow
         handle = await client.start_workflow(
