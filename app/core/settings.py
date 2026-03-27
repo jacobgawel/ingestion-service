@@ -1,5 +1,5 @@
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.enums import LOG_LEVEL
 
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
 
     # Embedding
     EMBEDDING_DIMENTIONS: int = Field(
-        default=1526, description="Embedding model dimensions"
+        default=1536, description="Embedding model dimensions"
     )
     EMBEDDING_MODEL: str = Field(
         default="text-embedding-3-small",
@@ -64,9 +64,7 @@ class Settings(BaseSettings):
     MINIO_ACCESS_KEY: str = Field(..., description="Minio access key")
     MINIO_SECRET_KEY: str = Field(..., description="Minio secret key")
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
 
 config = Settings()  # pyright: ignore[reportCallIssue]

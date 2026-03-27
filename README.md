@@ -1,6 +1,6 @@
 # Ingestion Service
 
-A document ingestion and vector embedding pipeline built with FastAPI. Accepts file uploads, converts documents to Markdown via Docling, generates vector embeddings (OpenAI/Mixedbread), and stores them in Qdrant. Temporal orchestrates the async workflow pipeline.
+A document ingestion and vector embedding pipeline built with FastAPI. Accepts file uploads, converts documents to Markdown via Docling, generates vector embeddings (OpenAI), and stores them in AlloyDB (pgvector). Images are captioned via OpenAI's vision model with structured output and stored in MinIO. Temporal orchestrates the async workflow pipeline.
 
 ## Tech Stack
 
@@ -8,11 +8,10 @@ A document ingestion and vector embedding pipeline built with FastAPI. Accepts f
 - **Framework:** FastAPI + Uvicorn
 - **Package Manager:** [UV](https://github.com/astral-sh/uv)
 - **Workflow Engine:** Temporal
-- **Vector DB:** Qdrant
-- **Databases:** ScyllaDB (via scylla-driver), AlloyDB (via asyncpg)
+- **Database:** AlloyDB (via asyncpg) with pgvector for embeddings
 - **Object Storage:** MinIO (via boto3)
 - **Messaging:** NATS (via nats-py) — pub/sub for real-time job updates
-- **Embeddings:** OpenAI / Mixedbread
+- **Embeddings:** OpenAI (`text-embedding-3-small`, 1536 dimensions)
 - **Document Parsing:** Docling
 - **Indexing/Splitting:** LlamaIndex (MarkdownNodeParser, vector indexing, OpenAI embeddings)
 - **ML Runtime:** PyTorch (CUDA support)
@@ -40,7 +39,6 @@ Create a `.env` file in the project root. See `app/core/settings.py` for all ava
 | Variable | Description |
 |---|---|
 | `OPENAI_KEY` | OpenAI API key |
-| `MIXEDBREAD_KEY` | Mixedbread API key |
 | `MINIO_HOST` | MinIO host |
 | `MINIO_ACCESS_KEY` | MinIO access key |
 | `MINIO_SECRET_KEY` | MinIO secret key |
@@ -50,24 +48,21 @@ Create a `.env` file in the project root. See `app/core/settings.py` for all ava
 | Variable | Default |
 |---|---|
 | `TEMPORAL_HOST` | `localhost:7233` |
-| `QDRANT_HOST` | `localhost` |
-| `QDRANT_PORT` | `6333` |
-| `QDRANT_GRPC_PORT` | `6334` |
-| `SCYLLA_HOSTS` | `localhost` |
-| `SCYLLA_PORT` | `9042` |
-| `SCYLLA_KEYSPACE` | `nexus` |
 | `NATS_URL` | `nats://localhost:4222` |
 | `ALLOYDB_HOST` | `localhost` |
 | `ALLOYDB_PORT` | `5432` |
 | `ALLOYDB_DATABASE` | `postgres` |
+| `ALLOYDB_USER` | `None` |
+| `ALLOYDB_PASSWORD` | `None` |
 | `MAX_CONCURRENT_FILES` | `4` |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` |
 | `APP_LOG_LEVEL` | `INFO` |
 | `HOST` | `127.0.0.1` |
 | `PORT` | `8065` |
 
 ### Start Infrastructure
 
-Starts Qdrant, MinIO, ScyllaDB, NATS, and AlloyDB:
+Starts MinIO, NATS, and AlloyDB:
 
 ```bash
 docker compose up --build -d
@@ -108,9 +103,9 @@ uv run -m app.worker
 
 ```
 app/
-├── clients/       # Singleton client managers (Temporal, MinIO, Qdrant, OpenAI, Mixedbread, ScyllaDB, NATS, AlloyDB)
+├── clients/       # Singleton client managers (Temporal, MinIO, OpenAI, NATS, AlloyDB)
 ├── core/          # Settings (Pydantic BaseSettings), enums, constants, logger, dependencies, temporal constants
-├── database/      # Database engines — ScyllaEngine (async CQL wrapper), AlloyDBEngine (asyncpg pool wrapper)
+├── database/      # Database engine — AlloyDBEngine (asyncpg pool wrapper)
 ├── models/        # Pydantic models (request/response, workflow DTOs, internal entities)
 ├── repositories/  # Data-access layer (domain-specific DB queries)
 ├── routes/        # FastAPI routers (ingestion REST, jobs REST + WebSocket)
@@ -122,12 +117,12 @@ main.py            # FastAPI app entrypoint
 
 ## Architecture
 
-- **Temporal workflows** — 3-stage pipeline: Parse + Embed → Finalize, with retries (5 attempts, exponential backoff) and heartbeats
-- **Job tracking** — ScyllaDB tables (`ingestion_jobs`, `ingestion_files`) persist job/file status; schema auto-created on startup
-- **Document storage** — AlloyDB stores documents and chunked embeddings
+- **Temporal workflows** — 2-stage pipeline: Parse+Embed → Finalize, with retries (5 attempts, exponential backoff) and heartbeats
+- **Job tracking** — AlloyDB tables (`ingestion_jobs`, `ingestion_files`, `documents`, `document_chunks`) persist job/file status and embeddings; schema auto-created on startup
+- **Deduplication** — File content hashing allows cache hits to reuse existing embeddings
 - **Event-driven updates** — NATS pub/sub decouples Temporal activities from WebSocket handlers for real-time job progress
-- **Singleton pattern** for all client managers — eager init (OpenAI, Qdrant, Mixedbread), async init (Temporal, ScyllaDB, NATS, AlloyDB), sync init (MinIO)
-- **Repository pattern** for domain-specific DB queries via `ScyllaEngine` and `AlloyDBEngine`
+- **Singleton pattern** for all client managers — eager init (OpenAI), async init (Temporal, NATS, AlloyDB), sync init (MinIO)
+- **Repository pattern** for domain-specific DB queries via `AlloyDBEngine`
 - **Dependency injection** via FastAPI's `Depends()`
 - **Concurrency control** — asyncio Semaphore limits concurrent file processing
 
@@ -139,8 +134,6 @@ Pre-commit hooks configured in `.pre-commit-config.yaml`:
 pre-commit run --all-files
 ```
 
-- **Black** — code formatting
-- **isort** — import sorting
 - **Ruff** — linting + formatting
 - **MyPy** — type checking
 - **Bandit** — security scanning
