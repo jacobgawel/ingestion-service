@@ -1,0 +1,12 @@
+[project]
+name = "ingestion-api"
+version = "0.1.0"
+description = "FastAPI server for the ingestion service"
+requires-python = ">=3.14"
+dependencies = [
+    "ingestion-shared",
+    "fastapi[standard]>=0.129.0",
+]
+
+[tool.uv.sources]
+ingestion-shared = { workspace = true }

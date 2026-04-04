@@ -1,0 +1,15 @@
+[project]
+name = "ingestion-shared"
+version = "0.1.0"
+description = "Shared clients, core utilities, database, models, and repositories"
+requires-python = ">=3.14"
+dependencies = [
+    "asyncpg>=0.30.0",
+    "boto3>=1.42.49",
+    "minio>=7.2.20",
+    "nats-py>=2.9.0",
+    "openai>=2.21.0",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.13.0",
+    "temporalio>=1.22.0",
+]

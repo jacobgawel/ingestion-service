@@ -1,0 +1,20 @@
+[project]
+name = "ingestion-worker"
+version = "0.1.0"
+description = "Temporal worker for document ingestion and embedding"
+requires-python = ">=3.14"
+dependencies = [
+    "ingestion-shared",
+    "docling>=2.73.1",
+    "huggingface-hub[hf-xet]>=0.36.2",
+    "llama-index-core>=0.14.14",
+    "llama-index-embeddings-openai>=0.5.1",
+    "llama-index-llms-openai>=0.6.18",
+    "tiktoken>=0.9.0",
+    "torch>=2.5.1",
+    "torchaudio>=2.10.0",
+    "torchvision>=0.25.0",
+]
+
+[tool.uv.sources]
+ingestion-shared = { workspace = true }

@@ -4,11 +4,38 @@
 
 Ingestion Service — a document ingestion and vector embedding pipeline built with FastAPI. It accepts file uploads, converts documents to Markdown via Docling, generates vector embeddings (OpenAI), and stores them in AlloyDB (pgvector). Images (standalone uploads or extracted from PDFs) are captioned via OpenAI's vision model (gpt-5-mini) with structured output and stored in MinIO. Temporal orchestrates the async workflow pipeline.
 
+## Monorepo Structure
+
+This project uses a **uv workspace** monorepo with three packages:
+
+```
+packages/
+├── shared/          # ingestion-shared — Shared clients, core, database, models, repositories
+│   └── shared/
+│       ├── clients/       # Singleton client managers (Temporal, MinIO, OpenAI, NATS, AlloyDB)
+│       ├── core/          # Settings (Pydantic BaseSettings), enums, constants, logger, temporal constants
+│       ├── database/      # Database engine — AlloyDBEngine (asyncpg pool wrapper)
+│       ├── models/        # Pydantic models — api.py (request/response), ingestion.py (FileEntity, FileSummary), workflows.py (workflow DTOs, ImageCaptionResponse)
+│       └── repositories/  # Data-access layer (domain-specific DB queries per feature)
+├── api/             # ingestion-api — FastAPI server
+│   └── api/
+│       ├── main.py        # FastAPI app entrypoint
+│       ├── dependencies.py # FastAPI dependency injection
+│       └── routes/        # FastAPI routers (ingestion REST, jobs REST + WebSocket)
+└── worker/          # ingestion-worker — Temporal worker
+    └── worker/
+        ├── __main__.py    # Temporal worker entrypoint
+        ├── service/       # Business logic (document processing, image captioning, embedding)
+        └── temporal/      # Workflow definitions and activities
+```
+
+**Import conventions:** Use `shared.*` for shared code, `api.*` for API code, `worker.*` for worker code.
+
 ## Tech Stack
 
 - **Language:** Python 3.14
 - **Framework:** FastAPI + Uvicorn
-- **Package Manager:** UV (astral-sh/uv)
+- **Package Manager:** UV (astral-sh/uv) with workspaces
 - **Workflow Engine:** Temporal
 - **Database:** AlloyDB (via asyncpg) with pgvector for embeddings
 - **Object Storage:** MinIO (via boto3)
@@ -23,14 +50,14 @@ Ingestion Service — a document ingestion and vector embedding pipeline built w
 ## Common Commands
 
 ```bash
-# Install dependencies
+# Install all workspace dependencies
 uv sync
 
 # Start the FastAPI server
-uv run ./main.py
+uv run --package ingestion-api python -m api.main
 
 # Start the Temporal worker
-uv run -m app.worker
+uv run --package ingestion-worker python -m worker
 
 # Start infrastructure (MinIO + NATS + AlloyDB)
 docker compose up --build -d
@@ -49,26 +76,10 @@ All configured in `.pre-commit-config.yaml`:
 - **MyPy** — type checking (`--ignore-missing-imports --check-untyped-defs --explicit-package-bases`)
 - **Bandit** — security scanning
 
-## Project Structure
-
-```
-app/
-├── clients/       # Singleton client managers (Temporal, MinIO, OpenAI, NATS, AlloyDB)
-├── core/          # Settings (Pydantic BaseSettings), enums, constants, logger, dependencies, temporal constants
-├── database/      # Database engine — AlloyDBEngine (asyncpg pool wrapper)
-├── models/        # Pydantic models — api.py (request/response), ingestion.py (FileEntity, FileSummary), workflows.py (workflow DTOs, ImageCaptionResponse)
-├── repositories/  # Data-access layer (domain-specific DB queries per feature)
-├── routes/        # FastAPI routers (ingestion REST, jobs REST + WebSocket)
-├── service/       # Business logic (document processing, image captioning, embedding)
-├── temporal/      # Workflow definitions and activities
-└── worker.py      # Temporal worker entrypoint
-main.py            # FastAPI app entrypoint
-```
-
 ## Architecture Patterns
 
 - **Singleton pattern** for all client managers. Eager initialization in `__init__`: OpenAI. Async `initialize()` at startup: Temporal, NATS, AlloyDB. Synchronous `initialize()`: MinIO
-- **Repository pattern** for domain-specific DB queries (`app/repositories/`). Each feature gets its own repository file (e.g., `ingestion.py`). Repositories depend on `AlloyDBEngine` for query execution.
+- **Repository pattern** for domain-specific DB queries (`packages/shared/shared/repositories/`). Each feature gets its own repository file (e.g., `ingestion.py`). Repositories depend on `AlloyDBEngine` for query execution.
 - **Dependency injection** via FastAPI's `Depends()` for client access in routes
 - **Async throughout** — AsyncOpenAI, asyncpg, async context managers
 - **Temporal workflows** — 2-stage pipeline: Parse+Embed → Finalize, with retries (5 attempts, exponential backoff) and heartbeats
@@ -80,7 +91,7 @@ main.py            # FastAPI app entrypoint
 
 ## Environment Variables
 
-Configured via `.env` file (loaded by Pydantic BaseSettings in `app/core/settings.py`):
+Configured via `.env` file at the workspace root (loaded by Pydantic BaseSettings in `packages/shared/shared/core/settings.py`):
 
 **Required:**
 - `OPENAI_KEY` — OpenAI API key
